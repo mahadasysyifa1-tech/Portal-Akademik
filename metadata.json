@@ -1,0 +1,8 @@
+{
+  "name": "Portal Akademik Idad Jamiiy",
+  "description": "Aplikasi informasi kegiatan belajar mengajar dan aktifitas Program I\u0027dad Jami\u0027iy Ma\u0027had Asy-Syifa.\n- Jadwal siswa dan guru secara real-time.\n- Kalender Pendidikan.\n- Silabus materi dan rencana belajar.\n- Data mata pelajaran dan guru.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

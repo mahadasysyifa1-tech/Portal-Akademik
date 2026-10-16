@@ -1,0 +1,6 @@
+{
+  "summary": "Penjelasan arsitektural lengkap mengenai perbandingan FixedBlockSubGrid di Jadwal (Schedule) vs Kaldik/Jurnal: perbandingan sumber data, dimensi tampilan, status kehadiran, dan aksi klik. Rencana implementasi diperbarui dengan konfirmasi bahwa FixedBlockSubGrid sudah memiliki dukungan badge dan tinggal di-wire ke data meetings.",
+  "updatedAt": "2026-10-15T22:13:16.162135932Z",
+  "requestFeedback": true,
+  "userFacing": true
+}
