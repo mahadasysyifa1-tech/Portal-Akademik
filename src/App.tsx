@@ -389,9 +389,12 @@ export default function App() {
       }
 
       // Also flush pending attendance drafts if any
+      let flushed = false;
       if (attendancePendingStore.isDirty) {
         await attendancePendingStore.flushBatchSave();
+        flushed = true;
       }
+      if (flushed) window.dispatchEvent(new Event('attendance:saved'));
 
       setSaveStatus({
         kind: 'ok',

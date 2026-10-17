@@ -10,3 +10,6 @@ data/
 bun.lock
 *.sql
 repomix-output.xml
+*.txt
+
+

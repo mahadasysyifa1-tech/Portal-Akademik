@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   CheckCircle2,
@@ -14,11 +14,7 @@ import {
   Search,
   Sparkles
 } from 'lucide-react';
-import type {
-  AttendanceStatus,
-  AttendanceRollCallData,
-  AttendanceRollCallStudent,
-} from '../../types';
+import type { PendingRollCallLog } from '../../utils/useAttendancePendingStore';
 
 interface AttendanceModalProps {
   meetingId: string;
@@ -29,9 +25,10 @@ interface AttendanceModalProps {
   targetHal?: number;
   targetUnitId?: string;
   availableUnits?: Array<{ id: string; title: string; pageStart?: number | string; pageEnd?: number | string }>;
-  initialDraft?: AttendanceRollCallData;
+  initialDraft?: PendingRollCallLog;
   onSaveDraft?: (draftPayload: any) => void;
 }
+
 
 const STATUS_OPTIONS: Array<{ value: AttendanceStatus; label: string; activeClass: string; inactiveClass: string }> = [
   { value: 'Hadir', label: 'Hadir', activeClass: 'bg-emerald-600 text-white border-emerald-600 shadow-2xs', inactiveClass: 'text-slate-600 hover:bg-slate-100 border-slate-200' },
@@ -74,19 +71,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   // Fetch meeting data & current roll call logs
   useEffect(() => {
     if (!isOpen || !meetingId) return;
-
-    if (initialDraft) {
-      setData(initialDraft);
-      setTeacherStatus(initialDraft.teacher.status || 'Hadir');
-      setTeacherTime(initialDraft.teacher.timestampStart || initialDraft.meeting.startTime || '08:00');
-      setTeacherNote(initialDraft.teacher.note || '');
-      setMeetingNotes(initialDraft.meeting.notes || '');
-      setMateri(targetMateri || '');
-      setHal(targetHal !== undefined ? targetHal : '');
-      setStudents(initialDraft.students || []);
-      setLoading(false);
-      return;
-    }
+    draftAppliedFor.current = null;
 
     let isMounted = true;
     setLoading(true);
@@ -136,7 +121,42 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [isOpen, meetingId, initialDraft]);
+  }, [isOpen, meetingId]);
+  const draftAppliedFor = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (loading || !initialDraft || !meetingId) return;
+    if (draftAppliedFor.current === meetingId) return;
+    draftAppliedFor.current = meetingId;
+
+    if (initialDraft.teacherLog) {
+      setTeacherStatus(initialDraft.teacherLog.status);
+      setTeacherTime(initialDraft.teacherLog.timestampStart || '08:00');
+      setTeacherNote(initialDraft.teacherLog.note || '');
+    }
+    if (initialDraft.studentLogs) {
+      const byId = new Map(initialDraft.studentLogs.map((l) => [l.studentId, l]));
+      setStudents((prev) =>
+      prev.map((s) => {
+        const d = byId.get(s.studentId);
+        if (!d) return s;
+        return {
+          ...s,
+          status: d.status,
+          timestampStart: d.timestampStart ?? s.timestampStart,
+          timestampEnd: d.timestampEnd ?? s.timestampEnd,
+          note: d.note ?? s.note,
+        };
+      })
+      );
+    }
+    if (initialDraft.meetingNotes !== undefined) setMeetingNotes(initialDraft.meetingNotes);
+    if (initialDraft.materialProgress) {
+      const mp = initialDraft.materialProgress;
+      if (mp.materi !== undefined) setMateri(mp.materi);
+      if (mp.hal !== undefined) setHal(mp.hal);
+    }
+  }, [loading, initialDraft, meetingId]);
 
   if (!isOpen) return null;
 
