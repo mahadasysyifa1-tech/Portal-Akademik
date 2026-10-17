@@ -461,7 +461,7 @@ export interface AttendanceRollCallStudent {
   name: string;
   nisn: string;
   gender: 'L' | 'P';
-  status: AttendanceStatus;
+  status: AttendanceStatus | null;
   timestampStart?: string;
   timestampEnd?: string;
   note?: string;
@@ -470,7 +470,7 @@ export interface AttendanceRollCallStudent {
 export interface AttendanceRollCallTeacher {
   id: string;
   name: string;
-  status: AttendanceStatus;
+  status: AttendanceStatus | null;
   timestampStart?: string;
   note?: string;
 }

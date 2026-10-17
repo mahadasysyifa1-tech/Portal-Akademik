@@ -56,8 +56,8 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   const [data, setData] = useState<AttendanceRollCallData | null>(null);
 
   // Editable local state
-  const [teacherStatus, setTeacherStatus] = useState<AttendanceStatus>('Hadir');
-  const [teacherTime, setTeacherTime] = useState<string>('08:00');
+  const [teacherStatus, setTeacherStatus] = useState<AttendanceStatus | null>(null);
+  const [teacherTime, setTeacherTime] = useState<string>('');
   const [teacherNote, setTeacherNote] = useState<string>('');
   const [meetingNotes, setMeetingNotes] = useState<string>('');
   const [students, setStudents] = useState<AttendanceRollCallStudent[]>([]);
@@ -72,6 +72,11 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   useEffect(() => {
     if (!isOpen || !meetingId) return;
     draftAppliedFor.current = null;
+    setData(null);
+    setStudents([]);
+    setTeacherStatus(null);
+    setTeacherTime('');
+    setTeacherNote('');
 
     let isMounted = true;
     setLoading(true);
@@ -86,8 +91,8 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
       .then((resData: AttendanceRollCallData) => {
         if (!isMounted) return;
         setData(resData);
-        setTeacherStatus(resData.teacher.status || 'Hadir');
-        setTeacherTime(resData.teacher.timestampStart || resData.meeting.startTime || '08:00');
+        setTeacherStatus(resData.teacher.status ?? null);
+        setTeacherTime(resData.teacher.timestampStart || '');
         setTeacherNote(resData.teacher.note || '');
 
         // Parse existing notes or material progress if saved previously
@@ -176,17 +181,20 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   const handleStudentStatusChange = (studentId: string, status: AttendanceStatus) => {
     const nowTime = new Date().toTimeString().slice(0, 5);
     setStudents((prev) =>
-      prev.map((s) => {
-        if (s.studentId !== studentId) return s;
-        return {
-          ...s,
-          status,
-          timestampStart: s.timestampStart || (status === 'Hadir' || status === 'Terlambat' ? nowTime : undefined),
-        };
-      })
+    prev.map((s) => {
+      if (s.studentId !== studentId) return s;
+      // Clicking the active status again unstages the student
+      if (s.status === status) {
+        return { ...s, status: null, timestampStart: undefined, timestampEnd: undefined };
+      }
+      return {
+        ...s,
+        status,
+        timestampStart: s.timestampStart || (status === 'Hadir' || status === 'Terlambat' ? nowTime : undefined),
+      };
+    })
     );
   };
-
   // Update student note
   const handleStudentNoteChange = (studentId: string, note: string) => {
     setStudents((prev) =>
@@ -327,7 +335,13 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
           ) : (
             <>
               {/* Section 1: Teacher Presence */}
-              <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-50/50 to-orange-50/40 border border-amber-200/80">
+              <div
+              className={`p-4 rounded-2xl border transition-colors ${
+                teacherStatus
+                ? 'bg-amber-50/60 border-amber-300 ring-1 ring-inset ring-amber-200'
+                : 'bg-gradient-to-r from-slate-50/50 to-orange-50/40 border-slate-200/80'
+              }`}
+              >
                 <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                   <div className="flex items-center gap-2">
                     <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center font-bold text-xs shadow-2xs">
@@ -349,7 +363,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                       <button
                         key={opt.value}
                         type="button"
-                        onClick={() => setTeacherStatus(opt.value)}
+                        onClick={() => setTeacherStatus((prev) => (prev === opt.value ? null : opt.value))}
                         className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
                           teacherStatus === opt.value ? opt.activeClass : opt.inactiveClass
                         }`}
@@ -369,6 +383,13 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                       onChange={(e) => setTeacherTime(e.target.value)}
                       className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-xs font-mono font-medium focus:ring-2 focus:ring-amber-500 focus:outline-none"
                     />
+                    <button
+                    type="button"
+                    onClick={() => setTeacherTime(data?.meeting.startTime || '')}
+                    className="px-2 py-2 text-[11px] font-bold rounded-full bg-white hover:bg-slate-50 cursor-pointer"
+                    >
+                      <Check className="w-4 h-4"/>
+                    </button>
                   </div>
                   <div className="flex items-center gap-2 text-xs">
                     <span className="text-slate-500 font-medium shrink-0">Catatan Guru:</span>
@@ -544,7 +565,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                           <tr
                             key={std.studentId}
                             className={`hover:bg-slate-50/80 transition-colors ${
-                              std.status !== 'Hadir' ? 'bg-amber-50/20' : ''
+                              std.status ? 'bg-amber-50/60 ring-1 ring-inset ring-amber-200' : ''
                             }`}
                           >
                             <td className="py-2 px-3 text-center text-slate-400 font-mono text-[11px]">

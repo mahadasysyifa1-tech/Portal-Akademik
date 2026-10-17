@@ -533,8 +533,8 @@ export async function getMeetingRollCall(
   const teacherData = {
     id: m.teacher_id || '',
     name: m.teacher_name || 'Ustadz / Pengajar',
-    status: (teacherLog?.status as AttendanceStatus) || 'Hadir',
-    timestampStart: teacherLog?.timestamp_start || m.start_time || '08:00',
+    status: (teacherLog?.status as AttendanceStatus) || null,
+    timestampStart: teacherLog?.timestamp_start || null,
     note: teacherLog?.note || '',
   };
 
@@ -545,9 +545,9 @@ export async function getMeetingRollCall(
       name: s.name,
       nisn: s.nisn || '',
       gender: s.gender as 'L' | 'P',
-      status: (existing?.status as AttendanceStatus) || 'Hadir',
-      timestampStart: existing?.timestamp_start || m.start_time || '08:00',
-      timestampEnd: existing?.timestamp_end || m.end_time || '10:00',
+      status: (existing?.status as AttendanceStatus) || null,
+      timestampStart: existing?.timestamp_start || null,
+      timestampEnd: existing?.timestamp_end || null,
       note: existing?.note || '',
     };
   });
@@ -654,6 +654,7 @@ export async function saveMeetingRollCall(
   }
 
   // Precalculate helper aggregation counts
+  const loggedStudents = studentLogs.filter((s) => !!s.status);
   const hadirCount = studentLogs.filter((s) => s.status === 'Hadir').length;
   const absentCount = studentLogs.filter((s) => s.status !== 'Hadir').length;
   const enrolledCount = studentLogs.length;
@@ -673,7 +674,7 @@ export async function saveMeetingRollCall(
   });
 
   // Upsert Teacher Log
-  if (teacherLog && teacherLog.id) {
+  if (teacherLog && teacherLog.id && teacherLog.status) {
     statements.push({
       sql: `INSERT INTO attnd_meeting_log (
               meeting_id, person_type, person_id, status, timestamp_start, note, updated_at
@@ -936,7 +937,7 @@ export async function batchSaveAttendance(
         });
       }
 
-      for (const s of studentLogs) {
+      for (const s of loggedStudents) {
         statements.push({
           sql: `INSERT INTO attnd_meeting_log (
                   meeting_id, person_type, person_id, status, timestamp_start, timestamp_end, note, updated_at
