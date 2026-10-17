@@ -465,6 +465,29 @@ export async function getMonthAttendanceSummary(
 
   return dailyResult;
 }
+// ----------------------------------------------------------------------------
+// Rebuilds the month cache from attnd_meeting so the summary always matches the database
+// ----------------------------------------------------------------------------
+export async function refreshAllMonthCache(client: Client) {
+  await client.batch(
+    [
+      { sql: 'DELETE FROM attnd_month_cache', args: [] },
+      {
+        sql: `INSERT INTO attnd_month_cache (date_str, total_sessions, completed_sessions, hadir_students, absent_students, updated_at)
+        SELECT meeting_date,
+        COUNT(*),
+                     SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END),
+                     SUM(COALESCE(present_count, 0)),
+                     SUM(COALESCE(absent_count, 0)),
+                     CURRENT_TIMESTAMP
+                     FROM attnd_meeting
+                     GROUP BY meeting_date`,
+                     args: [],
+      },
+    ],
+    'write'
+  );
+}
 
 // ----------------------------------------------------------------------------
 // Meeting Roll-Call Roster Data (for Attendance Roll-Call Sheet / Modal)
@@ -653,10 +676,10 @@ export async function saveMeetingRollCall(
     }
   }
 
-  // Precalculate helper aggregation counts
+  // Precalculate helper aggregation counts (logged students only)
   const loggedStudents = studentLogs.filter((s) => !!s.status);
-  const hadirCount = studentLogs.filter((s) => s.status === 'Hadir').length;
-  const absentCount = studentLogs.filter((s) => s.status !== 'Hadir').length;
+  const hadirCount = loggedStudents.filter((s) => s.status === 'Hadir').length;
+  const absentCount = loggedStudents.filter((s) => s.status !== 'Hadir').length;
   const enrolledCount = studentLogs.length;
 
   // Update meeting status and helper summary columns in one atomic write
@@ -688,8 +711,8 @@ export async function saveMeetingRollCall(
     });
   }
 
-  // Upsert Student Logs
-  for (const s of studentLogs) {
+  // Upsert Student Logs (logged students only)
+  for (const s of loggedStudents) {
     statements.push({
       sql: `INSERT INTO attnd_meeting_log (
               meeting_id, person_type, person_id, status, timestamp_start, timestamp_end, note, updated_at
@@ -892,6 +915,10 @@ export async function batchSaveAttendance(
   if (payload.rollCallLogs && payload.rollCallLogs.length > 0) {
     for (const item of payload.rollCallLogs) {
       const { meetingId, teacherLog, studentLogs = [], meetingNotes, materialProgress } = item;
+      const loggedStudents = studentLogs.filter((s) => !!s.status);
+      const hadirCount = loggedStudents.filter((s) => s.status === 'Hadir').length;
+      const absentCount = loggedStudents.filter((s) => s.status !== 'Hadir').length;
+      const enrolledCount = studentLogs.length;
       let finalNotes = meetingNotes || null;
       if (materialProgress && (materialProgress.materi || materialProgress.hal !== undefined)) {
         try {
@@ -906,13 +933,9 @@ export async function batchSaveAttendance(
         } catch {}
       }
 
-      const hadirCount = studentLogs.filter((s) => s.status === 'Hadir').length;
-      const absentCount = studentLogs.filter((s) => s.status !== 'Hadir').length;
-      const enrolledCount = studentLogs.length;
-
       statements.push({
         sql: `UPDATE attnd_meeting 
-              SET status = 'completed', 
+              SET status = 'completed',
                   notes = ?, 
                   present_count = ?, 
                   absent_count = ?, 
@@ -923,7 +946,7 @@ export async function batchSaveAttendance(
         args: [finalNotes, hadirCount, absentCount, enrolledCount, meetingId],
       });
 
-      if (teacherLog && teacherLog.id) {
+      if (teacherLog && teacherLog.id && teacherLog.status) {
         statements.push({
           sql: `INSERT INTO attnd_meeting_log (
                   meeting_id, person_type, person_id, status, timestamp_start, note, updated_at
@@ -936,7 +959,6 @@ export async function batchSaveAttendance(
           args: [meetingId, teacherLog.id, teacherLog.status, teacherLog.timestampStart || null, teacherLog.note || null],
         });
       }
-
       for (const s of loggedStudents) {
         statements.push({
           sql: `INSERT INTO attnd_meeting_log (

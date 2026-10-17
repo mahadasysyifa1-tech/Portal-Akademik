@@ -18,6 +18,7 @@ import {
   getMonthAttendanceSummary,
   getMonthMeetings,
   batchSaveAttendance,
+  refreshAllMonthCache,
   getMeetingRollCall,
   saveMeetingRollCall,
   updateMeetingStatus,
@@ -136,18 +137,13 @@ app.get('/api/attendance/month-meetings', async (req, res) => {
     const padMonth = String(month).padStart(2, '0');
     const startDate = `${year}-${padMonth}-01`;
     const endDate = `${year}-${padMonth}-31`;
-    let meetings = await getMonthMeetings(tursoClient, startDate, endDate);
-    if (meetings.length === 0) {
-      const state = await getDatabaseState();
-      if (state.rules && state.rules.length > 0) {
-        await generateAllRuleMeetings(tursoClient, state);
-        meetings = await getMonthMeetings(tursoClient, startDate, endDate);
-      }
-    }
+    const meetings = await getMonthMeetings(tursoClient, startDate, endDate);
     res.json(meetings);
   } catch (err: any) {
     console.error('Failed to get month meetings:', err);
-    res.status(500).json({ error: 'Failed to get month meetings', details: err?.message });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to get month meetings', details: err?.message });
+    }
   }
 });
 
@@ -158,6 +154,7 @@ app.post('/api/attendance/batch-save', async (req, res) => {
   const { statusUpdates, rollCallLogs } = req.body || {};
   try {
     const result = await batchSaveAttendance(tursoClient, { statusUpdates, rollCallLogs });
+    await refreshAllMonthCache(tursoClient);
     res.json(result);
   } catch (err: any) {
     console.error('Failed to batch save attendance:', err);
@@ -192,6 +189,7 @@ app.get('/api/attendance/meetings/:meetingId/logs', async (req, res) => {
   const { meetingId } = req.params;
   try {
     const rollCallData = await getMeetingRollCall(tursoClient, meetingId);
+    await refreshAllMonthCache(tursoClient);
     if (!rollCallData) {
       return res.status(404).json({ error: 'Meeting not found' });
     }
@@ -228,6 +226,7 @@ app.post('/api/attendance/meetings/:meetingId/status', async (req, res) => {
   }
   try {
     await updateMeetingStatus(tursoClient, meetingId, status);
+    await refreshAllMonthCache(tursoClient);
     res.json({ success: true, meetingId, status, updatedAt: new Date().toISOString() });
   } catch (err: any) {
     console.error('Failed to update meeting status:', err);
@@ -242,6 +241,7 @@ app.post('/api/attendance/generate-all-meetings', async (_req, res) => {
   try {
     const state = await getDatabaseState();
     const result = await generateAllRuleMeetings(tursoClient, state);
+    await refreshAllMonthCache(tursoClient);
     res.json({
       success: true,
       ...result,

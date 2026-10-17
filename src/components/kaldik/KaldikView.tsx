@@ -130,13 +130,31 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
     [currentYear, currentMonth, db.periods, events, allResolvedSlots, selectedPeriodFilter, eventTypeFilter]
   );
 
-  const monthlyStats = useMemo(() => computeMonthlyStats(calendarDays), [calendarDays]);
+  const jurnalDays = useMemo(() => {
+    if (mode !== 'jurnal') return calendarDays;
+    return calendarDays.map((d) => {
+      const meetings = monthMeetingsMap.get(d.dateStr) || [];
+      const classSlots = meetings.map((m: any) => ({
+        dateStr: d.dateStr,
+        classId: m.classId,
+        sessionId: m.sessionId,
+        subjectId: m.subjectId,
+        teacherId: m.teacherId || '',
+        roomId: m.roomId || '',
+        ruleId: m.id,
+        hasException: false,
+      }));
+      return { ...d, classSlots };
+    });
+  }, [mode, calendarDays, monthMeetingsMap]);
+
+  const monthlyStats = useMemo(() => computeMonthlyStats(jurnalDays), [jurnalDays]);
 
   const selectedDayData = useMemo(() => {
-    const found = calendarDays.find((d) => d.dateStr === selectedDateStr && d.isCurrentMonth);
+    const found = jurnalDays.find((d) => d.dateStr === selectedDateStr && d.isCurrentMonth);
     if (found) return found;
-    return calendarDays.find((d) => d.isCurrentMonth) || null;
-  }, [selectedDateStr, calendarDays]);
+    return jurnalDays.find((d) => d.isCurrentMonth) || null;
+  }, [selectedDateStr, jurnalDays]);
 
   const sortedDaySlots = useMemo(() => {
     if (!selectedDayData) return [];
@@ -249,7 +267,7 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
       />
 
       <KaldikMonthGrid
-        days={calendarDays}
+        days={jurnalDays}
         mode={mode}
         isAdmin={isAdmin}
         periods={db.periods}
