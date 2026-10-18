@@ -28,6 +28,7 @@ interface AttendanceModalProps {
   availableUnits?: Array<{ id: string; title: string; pageStart?: number | string; pageEnd?: number | string }>;
   initialDraft?: PendingRollCallLog;
   onSaveDraft?: (draftPayload: any) => void;
+  onDiscardDraft?: (meetingId: string) => void;
 }
 
 
@@ -49,7 +50,8 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   targetUnitId,
   availableUnits = [],
   initialDraft,
-  onSaveDraft
+  onSaveDraft,
+  onDiscardDraft
 }) => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -69,7 +71,57 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   const [materi, setMateri] = useState<string>(targetMateri || '');
   const [hal, setHal] = useState<string | number>(targetHal !== undefined ? targetHal : '');
 
-  // Fetch meeting data & current roll call logs
+  const baselineRef = useRef<string | null>(null);
+  const lastDraftRef = useRef<{ id: string; json: string } | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // Fixed field order so the same values always serialize the same way
+  const serializeState = (s: Record<string, any>) =>
+  JSON.stringify([s.teacherStatus, s.teacherTime, s.teacherNote, s.students, s.meetingNotes, s.materi, s.hal]);
+
+  const buildDraftPayload = () => ({
+    teacherLog: {
+      id: data?.teacher.id || '',
+      status: teacherStatus,
+      timestampStart: teacherTime,
+      note: teacherNote,
+    },
+    studentLogs: students.map((s) => ({
+      studentId: s.studentId,
+      status: s.status,
+      timestampStart: s.timestampStart,
+      timestampEnd: s.timestampEnd,
+      note: s.note,
+    })),
+    meetingNotes,
+    materialProgress: { materi, hal },
+  });
+
+  // Every change draws a draft; a change back to the database values clears it
+  useEffect(() => {
+    if (!isOpen || !meetingId || loading || baselineRef.current === null) return;
+    const current = serializeState({ teacherStatus, teacherTime, teacherNote, students, meetingNotes, materi, hal });
+
+    if (current === baselineRef.current) {
+      if (lastDraftRef.current && lastDraftRef.current.id === meetingId) {
+        lastDraftRef.current = null;
+        onDiscardDraft?.(meetingId);
+      }
+      return;
+    }
+    if (lastDraftRef.current && lastDraftRef.current.id === meetingId && lastDraftRef.current.json === current) return;
+
+    lastDraftRef.current = { id: meetingId, json: current };
+    onSaveDraft?.(buildDraftPayload());
+  }, [teacherStatus, teacherTime, teacherNote, students, meetingNotes, materi, hal, loading, isOpen, meetingId]);
+
+  const handleDiscardDraft = () => {
+    if (!meetingId) return;
+    lastDraftRef.current = null;
+    onDiscardDraft?.(meetingId);
+    setReloadKey((k) => k + 1);
+  };
+
   // Fetch meeting data & current roll call logs
   useEffect(() => {
     if (!isOpen || !meetingId) return;
@@ -91,23 +143,32 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
       let foundMateri = targetMateri || '';
       let foundHal: string | number = targetHal !== undefined ? targetHal : '';
 
-  if (resData.meeting.notes && resData.meeting.notes.startsWith('{')) {
-    try {
-      const obj = JSON.parse(resData.meeting.notes);
-      if (obj.summary) parsedSummary = obj.summary;
-      if (obj.materialProgress) {
-        if (obj.materialProgress.materi) foundMateri = obj.materialProgress.materi;
-        if (obj.materialProgress.hal !== undefined) foundHal = obj.materialProgress.hal;
+      if (resData.meeting.notes && resData.meeting.notes.startsWith('{')) {
+        try {
+          const obj = JSON.parse(resData.meeting.notes);
+          if (obj.summary) parsedSummary = obj.summary;
+          if (obj.materialProgress) {
+            if (obj.materialProgress.materi) foundMateri = obj.materialProgress.materi;
+            if (obj.materialProgress.hal !== undefined) foundHal = obj.materialProgress.hal;
+          }
+        } catch {}
       }
-    } catch {}
-  }
 
-  setMeetingNotes(parsedSummary);
-  setMateri(foundMateri);
-  setHal(foundHal);
-  setStudents(resData.students || []);
-  setLoading(false);
-    };
+      setMeetingNotes(parsedSummary);
+      setMateri(foundMateri);
+      setHal(foundHal);
+      setStudents(resData.students || []);
+      baselineRef.current = serializeState({
+        teacherStatus: resData.teacher.status ?? null,
+        teacherTime: resData.teacher.timestampStart || '',
+        teacherNote: resData.teacher.note || '',
+        students: resData.students || [],
+        meetingNotes: parsedSummary,
+        materi: foundMateri,
+        hal: foundHal,
+      });
+      setLoading(false);
+      };
 
     // Cache hit: show the roster immediately, no network request
     const cached = getCachedRollCall(meetingId);
@@ -135,7 +196,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [isOpen, meetingId]);
+  }, [isOpen, meetingId, reloadKey]);
   const draftAppliedFor = useRef<string | null>(null);
 
   useEffect(() => {
@@ -344,6 +405,18 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
           ) : (
             <>
               {/* Section 1: Teacher Presence */}
+              {initialDraft && (
+                <div className="flex items-center justify-between gap-3 px-4 py-2 rounded-xl bg-amber-50 border border-amber-200 text-xs font-bold text-amber-800">
+                  <span>Draft belum disimpan ke database</span>
+                  <button
+                  type="button"
+                  onClick={handleDiscardDraft}
+                  className="px-2.5 py-1 rounded-lg bg-white border border-amber-300 hover:bg-amber-100 cursor-pointer"
+                  >
+                  Buang Draft
+                  </button>
+                </div>
+              )}
               <div
               className={`p-4 rounded-2xl border transition-colors ${
                 teacherStatus
@@ -668,6 +741,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
             >
               Batal
             </button>
+            {/* Save draft button is redundant since now it is saved automatically
             <button
               type="button"
               onClick={handleSave}
@@ -690,7 +764,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                   <span>Simpan Presensi</span>
                 </>
               )}
-            </button>
+            </button> */}
           </div>
         </div>
       </div>

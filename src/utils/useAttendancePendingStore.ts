@@ -34,6 +34,7 @@ export interface AttendancePendingStore {
   getRollCallDraft: (meetingId: string) => PendingRollCallLog | undefined;
   isMeetingDrafted: (meetingId: string) => boolean;
   clearDrafts: () => void;
+  discardDraft: (meetingId: string) => void;
   flushBatchSave: () => Promise<{ success: boolean; updatedCount: number }>;
 }
 
@@ -105,6 +106,21 @@ export function useAttendancePendingStore(): AttendancePendingStore {
     setRollCallDrafts(new Map());
   }, []);
 
+  const discardDraft = useCallback((meetingId: string) => {
+    setStatusDrafts((prev) => {
+      if (!prev.has(meetingId)) return prev;
+      const next = new Map(prev);
+      next.delete(meetingId);
+      return next;
+    });
+    setRollCallDrafts((prev) => {
+      if (!prev.has(meetingId)) return prev;
+      const next = new Map(prev);
+      next.delete(meetingId);
+      return next;
+    });
+  }, []);
+
   const pendingCount = useMemo(() => {
     const keys = new Set([...statusDrafts.keys(), ...rollCallDrafts.keys()]);
     return keys.size;
@@ -154,6 +170,7 @@ export function useAttendancePendingStore(): AttendancePendingStore {
     getRollCallDraft,
     isMeetingDrafted,
     clearDrafts,
+    discardDraft,
     flushBatchSave,
   };
 }

@@ -379,6 +379,7 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
             onSaved={() => setActiveAttendance(null)}
             initialDraft={store.getRollCallDraft(meetingId)}
             onSaveDraft={(payload) => store.setRollCallDraft(meetingId, payload)}
+            onDiscardDraft={() => store.discardDraft(meetingId)}
             targetMateri={titles || undefined}
             targetHal={typeof maxPage === 'number' ? maxPage : parseInt(String(maxPage), 10) || undefined}
             targetUnitId={units[0]?.id}
