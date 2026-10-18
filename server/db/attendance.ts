@@ -1539,3 +1539,134 @@ export async function generateAllRuleMeetings(
   };
 }
 
+function assembleRollCall(m: any, enrolledRows: any[], logs: any[]): MeetingRollCallData {
+  const teacherLog = logs.find((l) => l.person_type === 'teacher' && l.person_id === m.teacher_id);
+  const studentLogsMap = new Map<string, any>();
+  for (const l of logs) {
+    if (l.person_type === 'student') studentLogsMap.set(l.person_id, l);
+  }
+
+  const teacherData = {
+    id: m.teacher_id || '',
+    name: m.teacher_name || 'Ustadz / Pengajar',
+    status: (teacherLog?.status as AttendanceStatus) || null,
+    timestampStart: teacherLog?.timestamp_start || null,
+    note: teacherLog?.note || '',
+  };
+
+  const studentList = enrolledRows.map((s) => {
+    const existing = studentLogsMap.get(s.id);
+    return {
+      studentId: s.id,
+      name: s.name,
+      nisn: s.nisn || '',
+      gender: s.gender as 'L' | 'P',
+      status: (existing?.status as AttendanceStatus) || null,
+                                       timestampStart: existing?.timestamp_start || null,
+                                       timestampEnd: existing?.timestamp_end || null,
+                                       note: existing?.note || '',
+    };
+  });
+
+  return {
+    meeting: {
+      id: m.id,
+      meetingDate: m.meeting_date,
+      meetingIndex: m.status === 'cancelled' ? undefined : (m.active_meeting_index !== null && m.active_meeting_index !== undefined ? Number(m.active_meeting_index) : (m.meeting_index ?? undefined)),
+      classId: m.class_id,
+      className: m.class_name || m.class_id,
+      classColor: m.class_color || '#E2E8F0',
+      classGrade: m.class_grade,
+      classSection: m.class_section,
+      subjectId: m.subject_id || '',
+      subjectName: m.subject_name || 'Pelajaran',
+      subjectColor: m.subject_color || '#3B82F6',
+      teacherId: m.teacher_id || '',
+      teacherName: m.teacher_name || 'Ustadz / Pengajar',
+      roomId: m.room_id || '',
+      roomName: m.room_name || 'Ruang',
+      sessionId: m.session_id || '',
+      sessionName: m.session_name || 'Sesi',
+      startTime: m.start_time || '08:00',
+      endTime: m.end_time || '10:00',
+      status: m.status as any,
+      notes: m.notes,
+      summary: {
+        totalEnrolled: studentList.length,
+        hadirCount: studentList.filter((s) => s.status === 'Hadir').length,
+        izinCount: studentList.filter((s) => s.status === 'Izin').length,
+        sakitCount: studentList.filter((s) => s.status === 'Sakit').length,
+        terlambatCount: studentList.filter((s) => s.status === 'Terlambat').length,
+        alpaCount: studentList.filter((s) => s.status === 'Alpa').length,
+        teacherStatus: teacherData.status,
+      },
+    },
+    teacher: teacherData,
+    students: studentList,
+  } as MeetingRollCallData;
+}
+
+export async function getMonthRollCalls(
+  client: Client,
+  startDate: string,
+  endDate: string
+): Promise<MeetingRollCallData[]> {
+  const meetingsRes = await client.execute({
+    sql: `
+    SELECT
+    m.*,
+    COALESCE(m.active_meeting_index, m.meeting_index, 1) as active_meeting_index,
+                                           c.name as class_name, c.color as class_color, c.grade as class_grade, c.section as class_section,
+                                           s.name as subject_name, s.color as subject_color,
+                                           t.name as teacher_name, r.name as room_name,
+                                           ses.name as session_name, ses.start_time, ses.end_time
+                                           FROM attnd_meeting m
+                                           LEFT JOIN classes c ON c.id = m.class_id
+                                           LEFT JOIN subjects s ON s.id = m.subject_id
+                                           LEFT JOIN teachers t ON t.id = m.teacher_id
+                                           LEFT JOIN rooms r ON r.id = m.room_id
+                                           LEFT JOIN sessions ses ON ses.id = m.session_id
+                                           WHERE m.meeting_date >= ? AND m.meeting_date <= ?
+                                           ORDER BY m.meeting_date, m.session_id
+                                           `,
+                                           args: [startDate, endDate],
+  });
+  const meetings = meetingsRes.rows as any[];
+  if (meetings.length === 0) return [];
+
+  const enrollRes = await client.execute({
+    sql: `
+    SELECT e.class_id, s.id, s.nisn, s.name, s.gender, s.phone
+    FROM attnd_enroll e
+    JOIN students s ON s.id = e.student_id
+    WHERE e.active = 1
+    AND e.class_id IN (SELECT DISTINCT class_id FROM attnd_meeting WHERE meeting_date >= ? AND meeting_date <= ?)
+    ORDER BY s.name ASC
+    `,
+    args: [startDate, endDate],
+  });
+  const enrollByClass = new Map<string, any[]>();
+  for (const r of enrollRes.rows as any[]) {
+    if (!enrollByClass.has(r.class_id)) enrollByClass.set(r.class_id, []);
+    enrollByClass.get(r.class_id)!.push(r);
+  }
+
+  const logsRes = await client.execute({
+    sql: `
+    SELECT l.*, m.id AS roll_meeting_id
+    FROM attnd_meeting_log l
+    JOIN attnd_meeting m ON m.id = l.meeting_id
+    WHERE m.meeting_date >= ? AND m.meeting_date <= ?
+    `,
+    args: [startDate, endDate],
+  });
+  const logsByMeeting = new Map<string, any[]>();
+  for (const l of logsRes.rows as any[]) {
+    if (!logsByMeeting.has(l.meeting_id)) logsByMeeting.set(l.meeting_id, []);
+    logsByMeeting.get(l.meeting_id)!.push(l);
+  }
+
+  return meetings.map((m) =>
+  assembleRollCall(m, enrollByClass.get(m.class_id) || [], logsByMeeting.get(m.id) || [])
+  );
+}

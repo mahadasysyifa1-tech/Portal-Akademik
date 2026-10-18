@@ -63,6 +63,23 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
   const [eventTypeFilter, setEventTypeFilter] = useState<string>('all');
   const [showFilters, setShowFilters] = useState<boolean>(false);
 
+  // generate all meetings
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  const handleGenerateMeetings = async () => {
+    if (!window.confirm('Buat jadwal presensi dari aturan? Sesi yang sudah dicatat tidak akan berubah.')) return;
+    setIsGenerating(true);
+    try {
+      const res = await fetch('/api/attendance/generate-all-meetings', { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      window.dispatchEvent(new Event('attendance:saved'));
+    } catch (err) {
+      alert('Gagal membuat jadwal presensi. Coba lagi.');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
   // Modals
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<KaldikEvent | null>(null);
@@ -239,6 +256,16 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
 
   return (
     <div className="space-y-4">
+      {mode === 'jurnal' && isAdmin && (
+        <button
+        type="button"
+        onClick={handleGenerateMeetings}
+        disabled={isGenerating}
+        className="px-3 py-1.5 text-xs font-bold rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
+        >
+        {isGenerating ? 'Membuat jadwal…' : 'Buat Jadwal Presensi'}
+        </button>
+      )}
       <KaldikToolbar
         currentYear={currentYear}
         currentMonth={currentMonth}

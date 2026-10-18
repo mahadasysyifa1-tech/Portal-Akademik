@@ -17,6 +17,7 @@ import {
   getOrCreateDayMeetings,
   getMonthAttendanceSummary,
   getMonthMeetings,
+  getMonthRollCalls,
   batchSaveAttendance,
   refreshAllMonthCache,
   getMeetingRollCall,
@@ -143,6 +144,25 @@ app.get('/api/attendance/month-meetings', async (req, res) => {
     console.error('Failed to get month meetings:', err);
     if (!res.headersSent) {
       res.status(500).json({ error: 'Failed to get month meetings', details: err?.message });
+    }
+  }
+});
+
+app.get('/api/attendance/month-rollcalls', async (req, res) => {
+  if (!tursoClient) {
+    return res.status(503).json({ error: 'Turso database is offline' });
+  }
+  try {
+    const now = new Date();
+    const year = Number(req.query.year) || now.getFullYear();
+    const month = Number(req.query.month) || now.getMonth() + 1;
+    const padMonth = String(month).padStart(2, '0');
+    const rollCalls = await getMonthRollCalls(tursoClient, `${year}-${padMonth}-01`, `${year}-${padMonth}-31`);
+    res.json(rollCalls);
+  } catch (err: any) {
+    console.error('Failed to get month roll-calls:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to get month roll-calls', details: err?.message });
     }
   }
 });

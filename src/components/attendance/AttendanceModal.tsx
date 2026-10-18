@@ -15,6 +15,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import type { PendingRollCallLog } from '../../utils/useAttendancePendingStore';
+import { getCachedRollCall } from '../../utils/rollCallCache';
 
 interface AttendanceModalProps {
   meetingId: string;
@@ -69,59 +70,67 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   const [hal, setHal] = useState<string | number>(targetHal !== undefined ? targetHal : '');
 
   // Fetch meeting data & current roll call logs
+  // Fetch meeting data & current roll call logs
   useEffect(() => {
     if (!isOpen || !meetingId) return;
     draftAppliedFor.current = null;
-    setData(null);
-    setStudents([]);
-    setTeacherStatus(null);
-    setTeacherTime('');
-    setTeacherNote('');
 
     let isMounted = true;
     setLoading(true);
     setError(null);
     setSaveSuccess(false);
 
+    const applyRollCall = (resData: AttendanceRollCallData) => {
+      setData(resData);
+      setTeacherStatus(resData.teacher.status ?? null);
+      setTeacherTime(resData.teacher.timestampStart || '');
+      setTeacherNote(resData.teacher.note || '');
+
+      // Parse existing notes or material progress if saved previously
+      let parsedSummary = resData.meeting.notes || '';
+      let foundMateri = targetMateri || '';
+      let foundHal: string | number = targetHal !== undefined ? targetHal : '';
+
+  if (resData.meeting.notes && resData.meeting.notes.startsWith('{')) {
+    try {
+      const obj = JSON.parse(resData.meeting.notes);
+      if (obj.summary) parsedSummary = obj.summary;
+      if (obj.materialProgress) {
+        if (obj.materialProgress.materi) foundMateri = obj.materialProgress.materi;
+        if (obj.materialProgress.hal !== undefined) foundHal = obj.materialProgress.hal;
+      }
+    } catch {}
+  }
+
+  setMeetingNotes(parsedSummary);
+  setMateri(foundMateri);
+  setHal(foundHal);
+  setStudents(resData.students || []);
+  setLoading(false);
+    };
+
+    // Cache hit: show the roster immediately, no network request
+    const cached = getCachedRollCall(meetingId);
+    if (cached) {
+      applyRollCall(cached);
+      return;
+    }
+
+    // Cache miss (e.g. a meeting outside the loaded month): fetch it
     fetch(`/api/attendance/meetings/${meetingId}/logs`)
-      .then((res) => {
-        if (!res.ok) throw new Error('Gagal memuat data presensi');
-        return res.json();
-      })
-      .then((resData: AttendanceRollCallData) => {
-        if (!isMounted) return;
-        setData(resData);
-        setTeacherStatus(resData.teacher.status ?? null);
-        setTeacherTime(resData.teacher.timestampStart || '');
-        setTeacherNote(resData.teacher.note || '');
-
-        // Parse existing notes or material progress if saved previously
-        let parsedSummary = resData.meeting.notes || '';
-        let foundMateri = targetMateri || '';
-        let foundHal: string | number = targetHal !== undefined ? targetHal : '';
-
-        if (resData.meeting.notes && resData.meeting.notes.startsWith('{')) {
-          try {
-            const obj = JSON.parse(resData.meeting.notes);
-            if (obj.summary) parsedSummary = obj.summary;
-            if (obj.materialProgress) {
-              if (obj.materialProgress.materi) foundMateri = obj.materialProgress.materi;
-              if (obj.materialProgress.hal !== undefined) foundHal = obj.materialProgress.hal;
-            }
-          } catch {}
-        }
-
-        setMeetingNotes(parsedSummary);
-        setMateri(foundMateri);
-        setHal(foundHal);
-        setStudents(resData.students || []);
-        setLoading(false);
-      })
-      .catch((err) => {
-        if (!isMounted) return;
-        setError(err.message || 'Terjadi kesalahan sistem');
-        setLoading(false);
-      });
+    .then((res) => {
+      if (!res.ok) throw new Error('Gagal memuat data presensi');
+      return res.json();
+    })
+    .then((resData: AttendanceRollCallData) => {
+      if (!isMounted) return;
+      applyRollCall(resData);
+    })
+    .catch(() => {
+      if (!isMounted) return;
+      setLoading(false);
+      onClose();
+    });
 
     return () => {
       isMounted = false;
@@ -136,7 +145,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
 
     if (initialDraft.teacherLog) {
       setTeacherStatus(initialDraft.teacherLog.status);
-      setTeacherTime(initialDraft.teacherLog.timestampStart || '08:00');
+      setTeacherTime(initialDraft.teacherLog.timestampStart || '');
       setTeacherNote(initialDraft.teacherLog.note || '');
     }
     if (initialDraft.studentLogs) {

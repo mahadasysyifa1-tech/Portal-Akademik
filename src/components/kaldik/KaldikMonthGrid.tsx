@@ -34,11 +34,10 @@ function getDayCompletion(
   store: AttendancePendingStore
 ): DayCompletion {
   const dayMeetings = monthMeetingsMap.get(dateStr) || [];
-  const stat = monthSummary[dateStr];
-  const total: number = stat?.totalSessions ?? slotCount;
-  const completed: number =
-    stat?.completedSessions ??
-    dayMeetings.filter((m: any) => store.getEffectiveStatus(m.id, m.status) === 'completed').length;
+  const total = dayMeetings.length;
+  const completed = dayMeetings.filter(
+    (m: any) => store.getEffectiveStatus(m.id, m.status) === 'completed'
+  ).length;
   const hasDraft = dayMeetings.some((m: any) => store.isMeetingDrafted(m.id));
   const isAllDone = completed >= total && total > 0;
   const isPartial = completed > 0 && !isAllDone;

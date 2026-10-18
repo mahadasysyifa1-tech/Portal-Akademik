@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { loadMonthRollCalls } from '../utils/rollCallCache';
 
 export function useMonthMeetings(year: number, month1: number) {
   const [monthMeetings, setMonthMeetings] = useState<any[]>([]);
@@ -9,6 +10,7 @@ export function useMonthMeetings(year: number, month1: number) {
 
   useEffect(() => {
     let isMounted = true;
+    loadMonthRollCalls(year, month1).catch(() => {});
 
     Promise.all([
       fetch(`/api/attendance/month-meetings?year=${year}&month=${month1}`)
