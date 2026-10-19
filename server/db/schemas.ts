@@ -369,5 +369,6 @@ CREATE INDEX IF NOT EXISTS idx_log_meeting ON attnd_meeting_log(meeting_id);
 CREATE INDEX IF NOT EXISTS idx_log_person ON attnd_meeting_log(person_type, person_id);
 CREATE INDEX IF NOT EXISTS idx_log_status ON attnd_meeting_log(status);
 CREATE INDEX IF NOT EXISTS idx_log_covering ON attnd_meeting_log(meeting_id, person_type, status);
+`;
 
 export const UNIFIED_SCHEMA_SQL = `${METADATA_SCHEMA_SQL}\n${KALDIK_SCHEMA_SQL}\n${ATTENDANCE_SCHEMA_SQL}`;

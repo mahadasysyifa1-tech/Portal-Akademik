@@ -128,6 +128,27 @@ app.get('/api/attendance/month-rollcalls', async (req, res) => {
   }
 });
 
+app.get('/api/attendance/month-meetings', async (req, res) => {
+  if (!tursoClient) {
+    return res.status(503).json({ error: 'Turso database is offline' });
+  }
+  try {
+    const now = new Date();
+    const year = Number(req.query.year) || now.getFullYear();
+    const month = Number(req.query.month) || now.getMonth() + 1;
+    const padMonth = String(month).padStart(2, '0');
+    const startDate = `${year}-${padMonth}-01`;
+    const endDate = `${year}-${padMonth}-31`;
+    const meetings = await getMonthMeetings(tursoClient, startDate, endDate);
+    res.json(meetings);
+  } catch (err: any) {
+    console.error('Failed to get month meetings:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to get month meetings', details: err?.message });
+    }
+  }
+});
+
 app.post('/api/attendance/batch-save', async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });

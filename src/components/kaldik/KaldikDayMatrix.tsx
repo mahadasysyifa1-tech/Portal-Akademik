@@ -30,6 +30,7 @@ export interface KaldikDayMatrixProps {
     activePeriods: Period[];
     classSlots: ResolvedSlot[];
   };
+  isAdmin?: boolean;
   formattedSelectedDate: string;
   sortedClasses: DatabaseState['classes'];
   sortedSessions: DatabaseState['sessions'];
@@ -135,7 +136,8 @@ export const KaldikDayMatrix: React.FC<KaldikDayMatrixProps> = ({
   isMeetingDrafted,
   onOpenAttendanceModal,
   onToggleSessionStatus,
-  onDiscardSessionDraft
+  onDiscardSessionDraft,
+  isAdmin
 }) => {
   const dateStr = selectedDayData.dateStr;
 
@@ -205,7 +207,7 @@ export const KaldikDayMatrix: React.FC<KaldikDayMatrixProps> = ({
     }
   };
   const handleBadgeClick = (block: FixedBlockState) => {
-    if (!block.isFilled || !block.meetingId) return;
+    if (!isAdmin || !block.isFilled || !block.meetingId) return;
     if (block.isDraft) {
       onDiscardSessionDraft?.(block.meetingId);
       return;
@@ -213,7 +215,6 @@ export const KaldikDayMatrix: React.FC<KaldikDayMatrixProps> = ({
     if (block.attendanceStatus === 'completed') return;
     onToggleSessionStatus?.(block.meetingId, block.attendanceStatus || 'scheduled');
   };
-
   return (
     <div className="space-y-6">
       {/* 1. Matriks Sesi Waktu: one row per session, one FixedBlockSubGrid per row */}
@@ -264,6 +265,8 @@ export const KaldikDayMatrix: React.FC<KaldikDayMatrixProps> = ({
 
                     <td className="p-2 align-middle">
                       <FixedBlockSubGrid
+                        showBadges
+                        isAdmin={isAdmin}
                         count={sortedClasses.length}
                         interactive={true}
                         onBlockClick={handleBlockClick}
@@ -386,7 +389,7 @@ export const KaldikDayMatrix: React.FC<KaldikDayMatrixProps> = ({
                         onOpenAttendanceModal ? () => onOpenAttendanceModal(slot, meeting) : undefined
                       }
                       onToggleStatus={
-                        onToggleSessionStatus ? () => onToggleSessionStatus(meetingId, status) : undefined
+                        isAdmin && onToggleSessionStatus ? () => onToggleSessionStatus(meetingId, status) : undefined
                       }
                     />
                   </div>

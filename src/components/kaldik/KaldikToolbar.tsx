@@ -8,7 +8,6 @@ export interface KaldikToolbarProps {
   currentYear: number;
   currentMonth: number; // 0-11
   mode: KaldikMode;
-  onModeChange: (mode: KaldikMode) => void;
   onPrevMonth: () => void;
   onNextMonth: () => void;
   onToday: () => void;
@@ -30,7 +29,6 @@ export const KaldikToolbar: React.FC<KaldikToolbarProps> = ({
   currentYear,
   currentMonth,
   mode,
-  onModeChange,
   onPrevMonth,
   onNextMonth,
   onToday,

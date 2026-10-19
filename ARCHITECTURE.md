@@ -1,175 +1,94 @@
-`\# QUICK-ROUTE INDEX & CODEBASE MAP (FOR AI AGENTS & DEVELOPERS)`
+# QUICK-ROUTE INDEX & CODEBASE MAP (FOR AI AGENTS & DEVELOPERS)
 
-`> \**CRITICAL DIRECTIVE FOR AI AGENT**: When modifying or inspecting a feature,
-go **`
+> **CRITICAL DIRECTIVE FOR AI AGENT**: When modifying or inspecting a feature, go **DIRECTLY** to the target file listed in the table below. **DO NOT** perform broad grep searches or speculative file scans across other directories. Keep edits surgical, localized, and single-pass.
 
-`` > DIRECTLY** to the target file listed in the table below. \**DO NOT** perform
-broad ` ``
+---
 
-``> grep` searches or speculative file scans across other directories. Keep edits``
+## 1. Quick-Route Component & Feature Map
 
-`> surgical, localized, and single-pass.`
+| Feature / UI Element | Primary File Location | Subcomponents / Dependencies |
+| :--- | :--- | :--- |
+| **Kaldik: Orkestrator Utama** | `src/components/kaldik/KaldikView.tsx` | Menyatukan mode Kalender & Jurnal, data presensi, dan modal |
+| **Kaldik: Toolbar & Mode Switch** | `src/components/kaldik/KaldikToolbar.tsx` | `KaldikModeSwitch.tsx`, navigasi bulan, quick action generate |
+| **Kaldik: Grid Kalender Bulanan** | `src/components/kaldik/KaldikMonthGrid.tsx` | Render sel hari, event badge, dot status kehadiran |
+| **Kaldik: Legenda & Indikator** | `src/components/kaldik/KaldikLegendStrip.tsx` | Filter event, legenda warna, ringkasan sesi bulan |
+| **Kaldik: Panel Detail Tanggal** | `src/components/kaldik/KaldikDayPanel.tsx` | Header tanggal terpilih, kontainer agenda / matriks |
+| **Kaldik: Agenda Event (Mode Kaldik)** | `src/components/kaldik/KaldikDayAgenda.tsx` | Kartu agenda/event tanggal, edit/delete event |
+| **Kaldik: Matriks KBM (Mode Jurnal)** | `src/components/kaldik/KaldikDayMatrix.tsx` | Matriks kelas × sesi, tombol absensi & batal/pulihkan |
+| **Kaldik: Baris Silabus per Sesi** | `src/components/kaldik/SlotSyllabusLine.tsx` | Badge kitab, volume, dan rentang halaman KBM |
+| **Kaldik: Modal Tambah/Edit Event** | `src/components/kaldik/KaldikEventModal.tsx` | Form event kalender akademik & periode KBM |
+| **Presensi: Slide-Over Drawer Roll-Call** | `src/components/attendance/AttendanceModal.tsx` | Slide-over drawer pencatatan kehadiran, steppers sesi ▲/▼, auto-draft live |
+| **Presensi: Roster & Enrollment** | `src/components/attendance/EnrollmentView.tsx` | Manajemen santri per kelas (`enrollment/`) |
+| **Jadwal: Fixed Block SubGrid** | `src/components/schedule/FixedBlockSubGrid.tsx` | Presentational primitive baris chip kelas per sesi |
+| **Studio & Jadwal Mingguan** | `src/components/UnifiedStudio.tsx` | Jadwal master mingguan, audit bentrok KBM |
+| **Rule Manager & Aturan KBM** | `src/components/ruleManager/RuleManagerView.tsx` | Pengaturan aturan KBM, slot, guru, dan mapel |
+| **Silabus & Pacing Linimasa** | `src/components/SyllabusView.tsx` | Silabus kurikulum, linimasa progres materi |
+| **Data Master (Kelas, Guru, Ruang)** | `src/components/EntityManager.tsx` | Manajemen CRUD data entitas sekolah |
+| **Data Store: Pending Drafts** | `src/utils/useAttendancePendingStore.ts` | In-memory draft store untuk batch save ke Turso |
+| **Data Hook: Presensi Bulanan** | `src/hooks/useMonthMeetings.ts` | Month-at-once data engine & in-memory date index |
+| **Data Cache: Roll-Call Client** | `src/utils/rollCallCache.ts` | Cache instan data roll-call per pertemuan |
+| **Server: Express API Router** | `server.ts` | Backend API (`/api/attendance/*`, `/api/database/*`) |
+| **Server: Data Access & Queries** | `server/db/attendance.ts` | Query SQL Turso untuk `attnd_meeting`, `attnd_meeting_log` |
+| **Server: DDL Schemas & Indexes** | `server/db/schemas.ts` | Skema database terpadu Turso LibSQL |
 
-`\- - -`
+---
 
-`\## 1\\. Quick-Route Component & Feature Map`
+## 2. Invariants & Rules
 
-`|Feature / UI Element             |Primary File Location                       
-|Subcomponents / Dependencies|`
+1. **Turso Cloud (LibSQL) is the sole source of truth**:
+   - Seluruh data jadwal, kalender akademik, dan presensi disimpan di Turso.
+   - Mutasi batch dijalankan secara atomik melalui `client.batch(..., 'write')`.
+   - Tidak ada lagi skema cache sekunder redundan (`attnd_month_cache`); rekap bulanan dihitung langsung on-the-fly dari `attnd_meeting`.
+2. **Kaldik adalah Single Source of Truth untuk Eksekusi**:
+   - Penggabungan Jurnal ke dalam Kaldik telah tuntas.
+   - Mode `kaldik` menampilkan kalender event, hari libur, dan periode KBM.
+   - Mode `jurnal` menampilkan eksekusi riil jadwal KBM, status presensi santri, dan progres silabus materi.
+3. **Draft Architecture (Pending Store)**:
+   - Perubahan status (Batal/Pulihkan) atau input absensi pada Kaldik ditampung di `useAttendancePendingStore`.
+   - Header menampilkan tombol *Simpan Perubahan* dan melakukan batch flush ke endpoint `/api/attendance/batch-save`.
+4. **File Size Budget**:
+   - Komponen dipertahankan modular di bawah 300–400 baris.
+   - Sub-komponen domain Kaldik dipisah rapi di `src/components/kaldik/`.
 
+---
 
-`|---------------------------------|---------------------------------------------------|---------------------------------------------------|`
+## 3. Syllabus & Material Hierarchy
 
-``|\**Jurnal Kalender & Grid KBM**  
-|\`src/components/attendance/JournalCalendar.tsx`|Mounted in
-\`src/components/JournalView.tsx`        |``
+```
+Book (books table)
+ └── BookChapter (book_chapters table) [id, chapter_num, title, page_start, page_end]
+      └── Material / SyllabusUnit (materials table)
+           ├── bookId -> Book.id
+           ├── chapterBookId -> BookChapter.id
+           ├── part -> Jilid / Volume number
+           ├── no / eno -> Sequential syllabus order
+           └── SyllabusScope (syllabus_scopes table)
+                └── Scopes materials to specific class sections & terms
+```
 
-``|\**Jurnal Sesi & Kartu
-Pertemuan**|\`src/components/attendance/JournalMeetingsAgenda.tsx`|Mounted in
-\`src/components/JournalView.tsx`        |``
+---
 
-``|\**Jadwalkan Pertemuan (Admin
-Modal)**|\`src/components/attendance/JournalScheduleModal.tsx`|Triggered from
-\`src/components/JournalView.tsx`    |``
+## 4. Kaldik Module Layout
 
-``|\**Presensi Roll-Call Modal**    
-|\`src/components/attendance/AttendanceModal.tsx`|Used across Journal &
-Presensi views               |``
+Kaldik dipecah menjadi orkestrator ramping, komponen presentasional modular, dan pure utilities:
 
-``|\**Presensi Rekap & Bulanan**    
-|\`src/components/attendance/PresensiView.tsx`|In
-\`src/components/attendance/`                    |``
+```
+src/components/kaldik/
+├── KaldikView.tsx         # Orkestrator utama, data wiring, dan integrasi modal
+├── KaldikToolbar.tsx      # Navigasi bulan, switch mode, dan filter
+├── KaldikMonthGrid.tsx    # Grid kalender bulanan, badge event, completion dots
+├── KaldikLegendStrip.tsx  # Legenda warna dan statistik sesi bulan
+├── KaldikDayPanel.tsx     # Kontainer rincian hari terpilih
+├── KaldikDayAgenda.tsx    # Agenda event/kegiatan (Mode Kaldik)
+├── KaldikDayMatrix.tsx    # Matriks sesi pelajaran × kelas (Mode Jurnal)
+├── SlotSyllabusLine.tsx   # Baris progres silabus kitab & halaman per sesi
+├── KaldikEventModal.tsx   # Modal tambah/edit agenda & event akademik
+└── KaldikModeSwitch.tsx   # Komponen toggle switch Kaldik vs Jurnal
 
-``|\**Enrollment Santri & Roster**  
-|\`src/components/attendance/EnrollmentView.tsx`|In
-\`src/components/attendance/`                    |``
-
-``|\**Silabus Pacing & Linimasa
-Sesi**|\`src/components/syllabus/SyllabusTimeline.tsx`     |Mounted in
-\`src/components/SyllabusView.tsx`       |``
-
-``|\**Silabus Pemilihan Pelajaran** 
-|\`src/components/syllabus/SyllabusSubjectPicker.tsx`|Mounted in
-\`src/components/SyllabusView.tsx`       |``
-
-``|\**Syllabus Scope Modal
-(Multi-Book)**|\`src/components/ruleManager/SyllabusScopeModal.tsx`|Opened via
-deep-link from Syllabus & RuleManager   |``
-
-``|\**Rule Manager & Studio Jadwal**
-|\`src/components/ruleManager/RuleManagerView.tsx`|\`SyllabusPanel.tsx`,
-\`MultiBookScopeModal.tsx`     |``
-
-``|\**Kaldik (Kalender Akademik)**   |\`src/components/kaldik/KaldikView.tsx`    
-|\`KaldikEventModal.tsx`|``
-
-``|\**Master Data (Guru, Kelas, Ruang)**|\`src/components/EntityManager.tsx`     
-|\`src/components/database/*`|``
-
-``|\**Pacing Calculation Engine**    |\`src/utils/pacingEngine.ts`               
-|Calculates meeting pacing, pages, and targets|``
-
-``|\**Database Server Router & Cache**|\`server/db/index.ts`                     
-|Express server database handlers & in-memory cache|``
-
-``|\**Attendance SQL & Month Cache** |\`server/db/attendance.ts`                 
-|Turso SQL queries, \`attnd_meeting`, \`attnd_month_cache`|``
-
-``|\**Turso SQL Schemas & Indexes**  |\`server/db/schemas.ts`                    
-|DDL statements, composite and covering indexes|``
-
-``| \**Kaldik: Toolbar & Navigasi Bulan** |
-\`src/components/kaldik/KaldikToolbar.tsx` | Mode switch, filter toggle, Event
-Baru |``
-
-``| \**Kaldik: Grid Bulanan & Badge Sel** |
-\`src/components/kaldik/KaldikMonthGrid.tsx` | Day cells, event badges, jurnal
-completion dots |``
-
-``| \**Kaldik: Legenda & Statistik Bulan** |
-\`src/components/kaldik/KaldikLegendStrip.tsx` | Legend, monthly counts,
-periods in month |``
-
-``| \**Kaldik: Panel Rincian Tanggal** |
-\`src/components/kaldik/KaldikDayPanel.tsx` | Day header, Event Tanggal Ini,
-wraps body |``
-
-``| \**Kaldik: Agenda Event (Mode Kaldik)** |
-\`src/components/kaldik/KaldikDayAgenda.tsx` | Event cards, edit/delete for
-admin |``
-
-``| \**Kaldik: Matriks Sesi (Mode Jurnal)** |
-\`src/components/kaldik/KaldikDayMatrix.tsx` | Session × class grid, status
-actions |``
-
-``| \**Kaldik: Baris Silabus per Sesi** |
-\`src/components/kaldik/SlotSyllabusLine.tsx` | Book badge, volume, page range |``
-
-``| \**Kaldik: Orkestrator** | \`src/components/kaldik/KaldikView.tsx` | State,
-data wiring, attendance modal mount |``
-
-``| \**Kaldik: Logika Kalender (pure)** | \`src/utils/kaldikCalendar.ts` | Grid
-builder, monthly stats, Indonesian labels |``
-
-``| \**Kaldik: Aturan Filter Event (pure)** | \`src/utils/kaldikEventFilter.ts` |
-Type/period filters, recurring and KBM date ranges |``
-
-``| \**Kaldik: Helper Slot & Tanggal** | \`src/utils/kaldikHelpers.ts` |
-\`toLocalDateStr`, \`buildMeetingId`, \`resolveSlotUnits` |``
-
-``| \**Kaldik: Data Presensi Bulanan** | \`src/hooks/useMonthMeetings.ts` |
-Fetches month meetings and summary, indexes by date |``
-
-`\- - -`
-
-`\## 2\\. Invariants & Rules`
-
-`1\.  \**Turso Cloud (LibSQL) is the sole source of truth**:`
-
-``  \- Never write to local SQLite files or reintroduce \`better-sqlite3`.``
-
-``  \- Writes are atomic batch statements (\`client.batch(..., 'write')`).``
-
-`2\.  \**File Size Budget**:`
-
-`  \- Keep individual components under 300–400 lines.`
-
-`  \- Heavy sub-views (modals, cards, pickers) must be extracted into their`
-
-`    domain folder.`
-
-`3\.  \**Admin Actions**:`
-
-`  \- Administrative mutations (such as "Jadwalkan Pertemuan" or master edits)`
-
-``    must be strictly guarded by \`isAdmin`.``
-
-`4\.  \**Fast-Track Prompt Convention**:`
-
-``  \- For fast, cheap AI executions, prompts should specify: `\\\[FILE]`,
-`\\\[TASK]`,``
-
-``    and `\\\[SCOPE]`.``
-
-`\- - -`
-
-`\## 3\\. Syllabus & Material Hierarchy`
-
-```` ``` ````
-`Book (books table)`
-` └── BookChapter (book_chapters table) \[id, chapter_num, title, page_start,
-page_end]`
-`      └── Material / SyllabusUnit (materials table)`
-`           ├── bookId -> Book.id`
-`           ├── chapterBookId -> BookChapter.id`
-`           ├── part -> Jilid / Volume number`
-`           ├── no / eno -> Sequential syllabus order`
-`           └── SyllabusScope (syllabus_scopes table)`
-`                └── Scopes materials to specific class sections & terms`
-```` ``` ````
-
-`\## 4. Kaldik Module Layout`
-
-`Kaldik is split into a thin orchestrator, presentational components, and pure
-utilities.`
-
+src/utils/
+├── kaldikCalendar.ts      # Pure calendar calculations, day cells, month stats
+├── kaldikEventFilter.ts   # Pure event filtering logic (KBM ranges, recurring)
+├── kaldikHelpers.ts       # Format tanggal lokal, ID meeting generator
+├── kaldikValidation.ts    # Validasi rentang tanggal event KBM
+└── useAttendancePendingStore.ts # Hook draft in-memory mutasi presensi
+```

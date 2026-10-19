@@ -4,20 +4,24 @@ import {
   CheckCircle2,
   AlertCircle,
   Clock,
-  User,
-  Users,
-  Building,
-  BookOpen,
-  Calendar,
-  Save,
-  Check,
+  RotateCcw,
+  Ban,
+  ChevronUp,
+  ChevronDown,
   Search,
-  Sparkles
+  BookOpen,
+  UserCheck
 } from 'lucide-react';
+import type {
+  AttendanceStatus,
+  AttendanceRollCallData,
+  AttendanceRollCallStudent,
+  AttendanceRollCallTeacher
+} from '../../types';
 import type { PendingRollCallLog } from '../../utils/useAttendancePendingStore';
 import { getCachedRollCall } from '../../utils/rollCallCache';
 
-interface AttendanceModalProps {
+export interface AttendanceModalProps {
   meetingId: string;
   isOpen: boolean;
   hasDraft: boolean;
@@ -32,22 +36,26 @@ interface AttendanceModalProps {
   onDiscardDraft?: (meetingId: string) => void;
   getEffectiveStatus?: (meetingId: string, dbStatus: string) => string;
   onSetSessionStatus?: (meetingId: string, status: 'scheduled' | 'cancelled') => void;
+  onPrevSession?: () => void;
+  onNextSession?: () => void;
+  hasPrevSession?: boolean;
+  hasNextSession?: boolean;
+  sessionTitle?: string;
+  classTitle?: string;
 }
 
-
-const STATUS_OPTIONS: Array<{ value: AttendanceStatus; label: string; activeClass: string; inactiveClass: string }> = [
-  { value: 'Hadir', label: 'Hadir', activeClass: 'bg-emerald-600 text-white border-emerald-600 shadow-2xs', inactiveClass: 'text-slate-600 hover:bg-slate-100 border-slate-200' },
-  { value: 'Izin', label: 'Izin', activeClass: 'bg-sky-600 text-white border-sky-600 shadow-2xs', inactiveClass: 'text-slate-600 hover:bg-slate-100 border-slate-200' },
-  { value: 'Sakit', label: 'Sakit', activeClass: 'bg-amber-500 text-white border-amber-500 shadow-2xs', inactiveClass: 'text-slate-600 hover:bg-slate-100 border-slate-200' },
-  { value: 'Terlambat', label: 'Terlambat', activeClass: 'bg-orange-500 text-white border-orange-500 shadow-2xs', inactiveClass: 'text-slate-600 hover:bg-slate-100 border-slate-200' },
-  { value: 'Alpa', label: 'Alpa', activeClass: 'bg-rose-600 text-white border-rose-600 shadow-2xs', inactiveClass: 'text-slate-600 hover:bg-slate-100 border-slate-200' },
+const STATUS_OPTIONS: Array<{ value: AttendanceStatus; label: string; activeClass: string }> = [
+  { value: 'Hadir', label: 'Hadir', activeClass: 'bg-emerald-600 text-white font-bold' },
+  { value: 'Izin', label: 'Izin', activeClass: 'bg-sky-600 text-white font-bold' },
+  { value: 'Sakit', label: 'Sakit', activeClass: 'bg-amber-500 text-white font-bold' },
+  { value: 'Terlambat', label: 'Terlambat', activeClass: 'bg-orange-500 text-white font-bold' },
+  { value: 'Alpa', label: 'Alpa', activeClass: 'bg-rose-600 text-white font-bold' },
 ];
 
 export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   meetingId,
   isOpen,
   onClose,
-  onSaved,
   targetMateri = '',
   targetHal,
   targetUnitId,
@@ -57,10 +65,15 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   onDiscardDraft,
   getEffectiveStatus,
   onSetSessionStatus,
-  hasDraft
+  hasDraft,
+  onPrevSession,
+  onNextSession,
+  hasPrevSession = false,
+  hasNextSession = false,
+  sessionTitle,
+  classTitle
 }) => {
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<AttendanceRollCallData | null>(null);
 
@@ -71,7 +84,6 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   const [meetingNotes, setMeetingNotes] = useState<string>('');
   const [students, setStudents] = useState<AttendanceRollCallStudent[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [saveSuccess, setSaveSuccess] = useState(false);
 
   // Minimal material progress state (just two fields: materi & hal)
   const [materi, setMateri] = useState<string>(targetMateri || '');
@@ -79,11 +91,16 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
 
   const baselineRef = useRef<string | null>(null);
   const lastDraftRef = useRef<{ id: string; json: string } | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
+  const draftAppliedFor = useRef<string | null>(null);
 
-  // Fixed field order so the same values always serialize the same way
+  // Dynamic Theme calculations
+  const serverStatus = data?.meeting?.status || 'scheduled';
+  const effectiveStatus = getEffectiveStatus ? getEffectiveStatus(meetingId, serverStatus) : serverStatus;
+  const isCancelled = effectiveStatus === 'cancelled';
+
+  // Fixed field order for baseline serialization
   const serializeState = (s: Record<string, any>) =>
-  JSON.stringify([s.teacherStatus, s.teacherTime, s.teacherNote, s.students, s.meetingNotes, s.materi, s.hal]);
+    JSON.stringify([s.teacherStatus, s.teacherTime, s.teacherNote, s.students, s.meetingNotes, s.materi, s.hal]);
 
   const buildDraftPayload = () => ({
     teacherLog: {
@@ -103,7 +120,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     materialProgress: { materi, hal },
   });
 
-  // Every change draws a draft; a change back to the database values clears it
+  // Live auto-save draft whenever values diverge from baseline
   useEffect(() => {
     if (!isOpen || !meetingId || loading || baselineRef.current === null) return;
     const current = serializeState({ teacherStatus, teacherTime, teacherNote, students, meetingNotes, materi, hal });
@@ -113,147 +130,123 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
         lastDraftRef.current = null;
         onDiscardDraft?.(meetingId);
       }
-      return;
+    } else {
+      if (!lastDraftRef.current || lastDraftRef.current.id !== meetingId || lastDraftRef.current.json !== current) {
+        lastDraftRef.current = { id: meetingId, json: current };
+        onSaveDraft?.(buildDraftPayload());
+      }
     }
-    if (lastDraftRef.current && lastDraftRef.current.id === meetingId && lastDraftRef.current.json === current) return;
+  }, [teacherStatus, teacherTime, teacherNote, students, meetingNotes, materi, hal, isOpen, meetingId, loading]);
 
-    lastDraftRef.current = { id: meetingId, json: current };
-    onSaveDraft?.(buildDraftPayload());
-  }, [teacherStatus, teacherTime, teacherNote, students, meetingNotes, materi, hal, loading, isOpen, meetingId]);
-
-  const handleDiscardDraft = () => {
-    if (!meetingId) return;
-    lastDraftRef.current = null;
-    onDiscardDraft?.(meetingId);
-    setReloadKey((k) => k + 1);
-  };
-
-  const autoCancelledRef = useRef(false);
-  const effectiveStatus =
-  meetingId && getEffectiveStatus
-  ? getEffectiveStatus(meetingId, data?.meeting.status || 'scheduled')
-  : data?.meeting.status || 'scheduled';
-  const isCancelled = effectiveStatus === 'cancelled';
-
-  const handleToggleCancel = () => {
-    if (!meetingId) return;
-    autoCancelledRef.current = false;
-    onSetSessionStatus?.(meetingId, isCancelled ? 'scheduled' : 'cancelled');
-  };
-
-  const handleTeacherStatusChange = (next: AttendanceStatus | null) => {
-    setTeacherStatus(next);
-    if (!meetingId) return;
-    if ((next === 'Izin' || next === 'Sakit' || next === 'Alpa') && !isCancelled) {
-      autoCancelledRef.current = true;
-      onSetSessionStatus?.(meetingId, 'cancelled');
-    } else if (autoCancelledRef.current && (next === 'Hadir' || next === 'Terlambat')) {
-      autoCancelledRef.current = false;
-      onSetSessionStatus?.(meetingId, 'scheduled');
-    }
-  };
-
-  // Fetch meeting data & current roll call logs
+  // Load meeting data
   useEffect(() => {
     if (!isOpen || !meetingId) return;
-    draftAppliedFor.current = null;
 
     let isMounted = true;
     setLoading(true);
     setError(null);
-    setSaveSuccess(false);
+    draftAppliedFor.current = null;
+    baselineRef.current = null;
 
-    const applyRollCall = (resData: AttendanceRollCallData) => {
-      setData(resData);
-      setTeacherStatus(resData.teacher.status ?? null);
-      setTeacherTime(resData.teacher.timestampStart || '');
-      setTeacherNote(resData.teacher.note || '');
-
-      // Parse existing notes or material progress if saved previously
-      let parsedSummary = resData.meeting.notes || '';
-      let foundMateri = targetMateri || '';
-      let foundHal: string | number = targetHal !== undefined ? targetHal : '';
-
-      if (resData.meeting.notes && resData.meeting.notes.startsWith('{')) {
-        try {
-          const obj = JSON.parse(resData.meeting.notes);
-          if (obj.summary) parsedSummary = obj.summary;
-          if (obj.materialProgress) {
-            if (obj.materialProgress.materi) foundMateri = obj.materialProgress.materi;
-            if (obj.materialProgress.hal !== undefined) foundHal = obj.materialProgress.hal;
-          }
-        } catch {}
-      }
-
-      setMeetingNotes(parsedSummary);
-      setMateri(foundMateri);
-      setHal(foundHal);
-      setStudents(resData.students || []);
-      baselineRef.current = serializeState({
-        teacherStatus: resData.teacher.status ?? null,
-        teacherTime: resData.teacher.timestampStart || '',
-        teacherNote: resData.teacher.note || '',
-        students: resData.students || [],
-        meetingNotes: parsedSummary,
-        materi: foundMateri,
-        hal: foundHal,
-      });
-      setLoading(false);
-      };
-
-    // Cache hit: show the roster immediately, no network request
     const cached = getCachedRollCall(meetingId);
     if (cached) {
-      applyRollCall(cached);
+      applyData(cached);
+      setLoading(false);
       return;
     }
 
-    // Cache miss (e.g. a meeting outside the loaded month): fetch it
     fetch(`/api/attendance/meetings/${meetingId}/logs`)
-    .then((res) => {
-      if (!res.ok) throw new Error('Gagal memuat data presensi');
-      return res.json();
-    })
-    .then((resData: AttendanceRollCallData) => {
-      if (!isMounted) return;
-      applyRollCall(resData);
-    })
-    .catch(() => {
-      if (!isMounted) return;
-      setLoading(false);
-      onClose();
-    });
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((rollCallData: AttendanceRollCallData) => {
+        if (!isMounted) return;
+        applyData(rollCallData);
+        setLoading(false);
+      })
+      .catch((err: any) => {
+        if (!isMounted) return;
+        setError(err.message || 'Gagal memuat presensi');
+        setLoading(false);
+      });
 
     return () => {
       isMounted = false;
     };
-  }, [isOpen, meetingId, reloadKey]);
-  const draftAppliedFor = useRef<string | null>(null);
+  }, [meetingId, isOpen]);
 
+  const applyData = (rollCallData: AttendanceRollCallData) => {
+    setData(rollCallData);
+
+    const initTeacherStatus = rollCallData.teacher?.status || 'Hadir';
+    const initTeacherTime = rollCallData.teacher?.timestampStart || rollCallData.meeting.startTime || '';
+    const initTeacherNote = rollCallData.teacher?.note || '';
+    const initMeetingNotes = rollCallData.meeting.notes || '';
+
+    let initMateri = targetMateri || '';
+    let initHal: string | number = targetHal !== undefined ? targetHal : '';
+
+    if (rollCallData.meeting.notes && rollCallData.meeting.notes.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(rollCallData.meeting.notes);
+        if (parsed.materialProgress) {
+          if (parsed.materialProgress.materi !== undefined) initMateri = parsed.materialProgress.materi;
+          if (parsed.materialProgress.hal !== undefined) initHal = parsed.materialProgress.hal;
+        }
+      } catch {}
+    }
+
+    const initStudents: AttendanceRollCallStudent[] = (rollCallData.students || []).map((s) => ({
+      ...s,
+      status: s.status || null,
+      timestampStart: s.timestampStart || rollCallData.meeting.startTime || '',
+    }));
+
+    setTeacherStatus(initTeacherStatus);
+    setTeacherTime(initTeacherTime);
+    setTeacherNote(initTeacherNote);
+    setMeetingNotes(initMeetingNotes);
+    setStudents(initStudents);
+    setMateri(initMateri);
+    setHal(initHal);
+
+    baselineRef.current = serializeState({
+      teacherStatus: initTeacherStatus,
+      teacherTime: initTeacherTime,
+      teacherNote: initTeacherNote,
+      students: initStudents,
+      meetingNotes: initMeetingNotes,
+      materi: initMateri,
+      hal: initHal,
+    });
+  };
+
+  // Re-apply draft overrides when ready
   useEffect(() => {
-    if (loading || !initialDraft || !meetingId) return;
+    if (loading || !initialDraft) return;
     if (draftAppliedFor.current === meetingId) return;
     draftAppliedFor.current = meetingId;
 
     if (initialDraft.teacherLog) {
-      setTeacherStatus(initialDraft.teacherLog.status);
-      setTeacherTime(initialDraft.teacherLog.timestampStart || '');
-      setTeacherNote(initialDraft.teacherLog.note || '');
+      if (initialDraft.teacherLog.status !== undefined) setTeacherStatus(initialDraft.teacherLog.status);
+      if (initialDraft.teacherLog.timestampStart !== undefined) setTeacherTime(initialDraft.teacherLog.timestampStart || '');
+      if (initialDraft.teacherLog.note !== undefined) setTeacherNote(initialDraft.teacherLog.note || '');
     }
     if (initialDraft.studentLogs) {
-      const byId = new Map(initialDraft.studentLogs.map((l) => [l.studentId, l]));
+      const byId = new Map(initialDraft.studentLogs.map((l: any) => [l.studentId, l]));
       setStudents((prev) =>
-      prev.map((s) => {
-        const d = byId.get(s.studentId);
-        if (!d) return s;
-        return {
-          ...s,
-          status: d.status,
-          timestampStart: d.timestampStart ?? s.timestampStart,
-          timestampEnd: d.timestampEnd ?? s.timestampEnd,
-          note: d.note ?? s.note,
-        };
-      })
+        prev.map((s) => {
+          const d: any = byId.get(s.studentId);
+          if (!d) return s;
+          return {
+            ...s,
+            status: d.status,
+            timestampStart: d.timestampStart ?? s.timestampStart,
+            timestampEnd: d.timestampEnd ?? s.timestampEnd,
+            note: d.note ?? s.note,
+          };
+        })
       );
     }
     if (initialDraft.meetingNotes !== undefined) setMeetingNotes(initialDraft.meetingNotes);
@@ -266,552 +259,332 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Mark all students present
-  const handleMarkAllPresent = () => {
-    const nowTime = new Date().toTimeString().slice(0, 5);
+  const markAllStudents = (status: AttendanceStatus) => {
     setStudents((prev) =>
       prev.map((s) => ({
         ...s,
-        status: 'Hadir',
-        timestampStart: s.timestampStart || nowTime,
+        status,
+        timestampStart: s.timestampStart || data?.meeting.startTime || '',
       }))
     );
   };
 
-  // Change individual student status
-  const handleStudentStatusChange = (studentId: string, status: AttendanceStatus) => {
-    const nowTime = new Date().toTimeString().slice(0, 5);
+  const setStudentStatus = (studentId: string, status: AttendanceStatus) => {
     setStudents((prev) =>
-    prev.map((s) => {
-      if (s.studentId !== studentId) return s;
-      // Clicking the active status again unstages the student
-      if (s.status === status) {
-        return { ...s, status: null, timestampStart: undefined, timestampEnd: undefined };
-      }
-      return {
-        ...s,
-        status,
-        timestampStart: s.timestampStart || (status === 'Hadir' || status === 'Terlambat' ? nowTime : undefined),
-      };
-    })
-    );
-  };
-  // Update student note
-  const handleStudentNoteChange = (studentId: string, note: string) => {
-    setStudents((prev) =>
-      prev.map((s) => (s.studentId === studentId ? { ...s, note } : s))
+      prev.map((s) =>
+        s.studentId === studentId
+          ? {
+              ...s,
+              status: s.status === status ? null : status,
+              timestampStart: s.timestampStart || data?.meeting.startTime || '',
+            }
+          : s
+      )
     );
   };
 
-  // Save changes to server
-  const handleSave = async () => {
-    if (!data) return;
-    setSaving(true);
-    setError(null);
-
-    try {
-      const payload = {
-        teacherLog: {
-          id: data.meeting.teacherId,
-          status: teacherStatus,
-          timestampStart: teacherTime,
-          note: teacherNote,
-        },
-        studentLogs: students.map((s) => ({
-          studentId: s.studentId,
-          status: s.status,
-          timestampStart: s.timestampStart,
-          timestampEnd: s.timestampEnd,
-          note: s.note,
-        })),
-        meetingNotes,
-        materialProgress: {
-          materi: materi.trim() || undefined,
-          hal: hal !== '' && !isNaN(Number(hal)) ? Number(hal) : undefined,
-          unitId: targetUnitId,
-        },
-      };
-
-      if (onSaveDraft) {
-        onSaveDraft(payload);
-        setSaveSuccess(true);
-        if (onSaved) onSaved();
-        setTimeout(() => {
-          onClose();
-        }, 120);
-        return;
-      }
-
-      const res = await fetch(`/api/attendance/meetings/${meetingId}/logs`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        throw new Error('Gagal menyimpan presensi ke database');
-      }
-
-      setSaveSuccess(true);
-      if (onSaved) onSaved();
-
-      // Responsive close without artificial waiting delay
-      setTimeout(() => {
-        onClose();
-      }, 120);
-    } catch (err: any) {
-      setError(err.message || 'Gagal menyimpan presensi');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  // Filter students by name or NISN
   const filteredStudents = students.filter((s) => {
-    if (!searchQuery) return true;
+    if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
-    return s.name.toLowerCase().includes(q) || (s.nisn && s.nisn.includes(q));
+    return s.name.toLowerCase().includes(q) || (s.nisn && s.nisn.toLowerCase().includes(q));
   });
 
-  // Summary counts
-  const countHadir = students.filter((s) => s.status === 'Hadir').length;
-  const countIzin = students.filter((s) => s.status === 'Izin').length;
-  const countSakit = students.filter((s) => s.status === 'Sakit').length;
-  const countTerlambat = students.filter((s) => s.status === 'Terlambat').length;
-  const countAlpa = students.filter((s) => s.status === 'Alpa').length;
+  const displaySession = sessionTitle || data?.meeting?.sessionName || 'Sesi';
+  const displayClass = classTitle || data?.meeting?.className || 'Kelas';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
-      <div className="relative w-full max-w-4xl bg-white rounded-2xl sm:rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]">
-        {/* Modal Header */}
-        <div className="px-5 py-4 sm:px-6 sm:py-5 border-b border-slate-100 flex items-start justify-between bg-slate-50/70">
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="px-2.5 py-0.5 text-xs font-bold rounded-lg bg-amber-100 text-amber-800 border border-amber-200">
-                {data?.meeting.sessionName || 'Sesi Pembelajaran'}
-              </span>
-              <span className="px-2.5 py-0.5 text-xs font-bold rounded-lg bg-indigo-100 text-indigo-800 border border-indigo-200">
-                Kelas: {data?.meeting.className || '-'}
-              </span>
-              <span className="text-xs text-slate-500 font-medium flex items-center gap-1">
-                <Clock className="w-3.5 h-3.5 text-slate-400" />
-                {data?.meeting.startTime} - {data?.meeting.endTime}
-              </span>
-              <span className="text-xs text-slate-500 font-medium flex items-center gap-1">
-                <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                {data?.meeting.meetingDate}
-              </span>
-            </div>
-            <h2 className="text-lg sm:text-xl font-bold text-slate-900 mt-1 flex items-center gap-2">
-              <BookOpen className="w-5 h-5 text-amber-600 shrink-0" />
-              <span>{data?.meeting.subjectName || 'Presensi Sesi'}</span>
-              {data?.meeting.roomName && (
-                <span className="text-xs font-semibold text-slate-500 bg-slate-200/70 px-2 py-0.5 rounded-md">
-                  {data.meeting.roomName}
-                </span>
-              )}
-            </h2>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors cursor-pointer"
+    <div className="fixed inset-0 z-50 overflow-hidden">
+      {/* Backdrop overlay */}
+      <div
+        onClick={onClose}
+        className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity duration-300 animate-in fade-in"
+      />
+
+      {/* Slide-Over Drawer Container */}
+      <div className="fixed inset-y-0 right-0 max-w-full flex pl-6 sm:pl-10">
+        <div
+          className={`w-screen max-w-md sm:max-w-xl h-full shadow-2xl flex flex-col transition-all duration-300 animate-in slide-in-from-right ${
+            isCancelled
+              ? 'bg-slate-100 text-slate-600'
+              : hasDraft
+              ? 'bg-white ring-2 ring-amber-400'
+              : 'bg-white'
+          }`}
+        >
+          {/* ------------------------------------------------------------- */}
+          {/* Header with Dynamic Theme & Minimal Icon Navigation           */}
+          {/* ------------------------------------------------------------- */}
+          <div
+            className={`px-4 py-3 flex items-center justify-between transition-colors shrink-0 ${
+              isCancelled
+                ? 'bg-slate-700 text-white'
+                : hasDraft
+                ? 'bg-amber-600 text-white shadow-sm'
+                : 'bg-[#024884] text-white shadow-sm'
+            }`}
           >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* Modal Body */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
-          {loading ? (
-            <div className="py-20 flex flex-col items-center justify-center text-slate-400 gap-3">
-              <Clock className="w-8 h-8 animate-spin text-amber-500" />
-              <p className="text-sm font-medium">Memuat daftar presensi...</p>
-            </div>
-          ) : error ? (
-            <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 flex items-center gap-3">
-              <AlertCircle className="w-5 h-5 shrink-0 text-rose-500" />
-              <p className="text-sm">{error}</p>
-            </div>
-          ) : (
-            <>
-              {/* Section 1: Teacher Presence */}
-              {/* Draft Banner */}
-              {(initialDraft || hasDraft) && (
-                <div className="flex items-center justify-between gap-3 px-4 py-2 rounded-xl bg-amber-50 border border-amber-200 text-xs font-bold text-amber-800">
-                  <span>Draft belum disimpan ke database</span>
-                  <button
-                  type="button"
-                  onClick={handleDiscardDraft}
-                  className="px-2.5 py-1 rounded-lg bg-white border border-amber-300 hover:bg-amber-100 cursor-pointer"
-                  >
-                  Buang Draft
-                  </button>
-                </div>
-              )}
-              {/* Cancel Session Button */}
-              <div className="flex justify-end">
-                <button
+            {/* Left: Icon Steppers (Up/Down) & Session Title */}
+            <div className="flex items-center gap-1.5 min-w-0">
+              <button
                 type="button"
-                onClick={handleToggleCancel}
-                className={`px-3 py-1.5 text-xs font-bold rounded-lg border cursor-pointer ${
-                  isCancelled
-                  ? 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
-                  : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
-                }`}
-                >
-                  {isCancelled ? 'Pulihkan Sesi' : 'Batalkan Sesi'}
-                </button>
-              </div>
-              {/* Teacher Row */}
-              <div
-              className={`p-4 rounded-2xl border transition-colors ${
-                teacherStatus
-                ? 'bg-amber-50/60 border-amber-300 ring-1 ring-inset ring-amber-200'
-                : 'bg-gradient-to-r from-slate-50/50 to-orange-50/40 border-slate-200/80'
-              }`}
+                onClick={onPrevSession}
+                disabled={!hasPrevSession}
+                className="p-1 rounded-md text-white/80 hover:text-white hover:bg-white/15 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                title="Sesi Sebelumnya (▲)"
               >
-                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center font-bold text-xs shadow-2xs">
-                      <User className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                        Pengajar / Ustadz
-                      </div>
-                      <div className="text-sm font-bold text-slate-900">
-                        {data?.teacher.name || 'Ustadz Pengampu'}
-                      </div>
-                    </div>
-                  </div>
+                <ChevronUp className="w-4 h-4" />
+              </button>
 
-                  {/* Teacher status segmented buttons */}
-                  <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 shadow-2xs">
-                    {STATUS_OPTIONS.map((opt) => (
-                      <button
-                        key={opt.value}
-                        type="button"
-                        onClick={() => handleTeacherStatusChange(teacherStatus === opt.value ? null : opt.value)}
-                        className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                          teacherStatus === opt.value ? opt.activeClass : opt.inactiveClass
-                        }`}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+              <button
+                type="button"
+                onClick={onNextSession}
+                disabled={!hasNextSession}
+                className="p-1 rounded-md text-white/80 hover:text-white hover:bg-white/15 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                title="Sesi Berikutnya (▼)"
+              >
+                <ChevronDown className="w-4 h-4" />
+              </button>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
-                  <div className="flex items-center gap-2 text-xs">
-                    <span className="text-slate-500 font-medium">Waktu Masuk:</span>
-                    <input
-                      type="time"
-                      value={teacherTime}
-                      onChange={(e) => setTeacherTime(e.target.value)}
-                      className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-xs font-mono font-medium focus:ring-2 focus:ring-amber-500 focus:outline-none"
-                    />
-                    <button
-                    type="button"
-                    onClick={() => setTeacherTime(data?.meeting.startTime || '')}
-                    className="px-2 py-2 text-[11px] font-bold rounded-full bg-white hover:bg-slate-50 cursor-pointer"
-                    >
-                      <Check className="w-4 h-4"/>
-                    </button>
-                  </div>
-                  <div className="flex items-center gap-2 text-xs">
-                    <span className="text-slate-500 font-medium shrink-0">Catatan Guru:</span>
+              <div className="ml-1 truncate">
+                <span className="text-xs font-bold leading-tight truncate block">
+                  {displaySession} • {displayClass}
+                </span>
+                <span className="text-[10px] text-white/75 truncate block">
+                  {data?.meeting?.subjectName || 'Pelajaran'}
+                </span>
+              </div>
+            </div>
+
+            {/* Right: Discard Draft, Cancel/Restore, Close X */}
+            <div className="flex items-center gap-1 shrink-0">
+              {/* Discard Draft Button */}
+              {hasDraft && onDiscardDraft && (
+                <button
+                  type="button"
+                  onClick={() => onDiscardDraft(meetingId)}
+                  className="p-1.5 rounded-lg bg-amber-700 hover:bg-amber-800 text-white transition-colors cursor-pointer"
+                  title="Batalkan perubahan draft"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </button>
+              )}
+
+              {/* Cancel / Restore Session Button */}
+              {onSetSessionStatus && (
+                <button
+                  type="button"
+                  onClick={() => onSetSessionStatus(meetingId, isCancelled ? 'scheduled' : 'cancelled')}
+                  className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                    isCancelled
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                      : 'hover:bg-white/15 text-white/80 hover:text-white'
+                  }`}
+                  title={isCancelled ? 'Pulihkan sesi ini' : 'Batalkan sesi ini'}
+                >
+                  {isCancelled ? <CheckCircle2 className="w-4 h-4" /> : <Ban className="w-4 h-4" />}
+                </button>
+              )}
+
+              {/* Close Drawer Button */}
+              <button
+                type="button"
+                onClick={onClose}
+                className="p-1.5 rounded-lg hover:bg-white/15 text-white/80 hover:text-white transition-colors cursor-pointer ml-1"
+                title="Tutup Panel"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Cancelled Banner */}
+          {isCancelled && (
+            <div className="bg-slate-200/90 text-slate-700 px-4 py-2 text-xs font-semibold flex items-center justify-between border-b border-slate-300">
+              <span className="flex items-center gap-1.5">
+                <Ban className="w-3.5 h-3.5 text-slate-500" />
+                <span>Sesi ini berstatus Dibatalkan (kehadiran tetap dapat dicatat)</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => onSetSessionStatus?.(meetingId, 'scheduled')}
+                className="text-emerald-700 font-bold hover:underline cursor-pointer"
+              >
+                Pulihkan Sesi
+              </button>
+            </div>
+          )}
+
+          {/* ------------------------------------------------------------- */}
+          {/* Compact Scrollable Body (Zero clutter, no bottom bar)         */}
+          {/* ------------------------------------------------------------- */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-3.5">
+            {loading ? (
+              <div className="py-20 flex flex-col items-center justify-center text-slate-400 gap-2">
+                <Clock className="w-6 h-6 animate-spin text-amber-500" />
+                <span className="text-xs font-medium">Memuat data presensi...</span>
+              </div>
+            ) : error ? (
+              <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{error}</span>
+              </div>
+            ) : (
+              <>
+                {/* 1. Material & Page Range (Compact inline strip) */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-center gap-2 text-xs">
+                  <BookOpen className="w-4 h-4 text-slate-400 shrink-0" />
+                  <input
+                    type="text"
+                    value={materi}
+                    onChange={(e) => setMateri(e.target.value)}
+                    placeholder="Judul materi / bab yang diajarkan..."
+                    className="flex-1 bg-transparent font-medium text-slate-800 placeholder-slate-400 focus:outline-none text-xs"
+                  />
+                  <div className="flex items-center gap-1 shrink-0 bg-white border border-slate-200 rounded-lg px-2 py-0.5">
+                    <span className="text-[10px] text-slate-400 font-bold">Hal.</span>
                     <input
                       type="text"
-                      placeholder="e.g. Guru pengganti / izin dinas"
-                      value={teacherNote}
-                      onChange={(e) => setTeacherNote(e.target.value)}
-                      className="flex-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-xs placeholder:text-slate-400 focus:ring-2 focus:ring-amber-500 focus:outline-none"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Minimal Material Progress Section (Hanya 2 Field: Materi & Hal) */}
-              <div className="p-4 rounded-2xl bg-indigo-50/40 border border-indigo-100 space-y-2.5">
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div className="flex items-center gap-2">
-                    <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold text-xs shadow-2xs">
-                      <BookOpen className="w-3.5 h-3.5" />
-                    </div>
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-900">
-                        Capaian Materi Hari Ini
-                      </h4>
-                      <p className="text-[11px] text-slate-500">
-                        Default otomatis terisi target pembelajaran sesi ini
-                      </p>
-                    </div>
-                  </div>
-
-                  {targetMateri && (
-                    <div className="text-[11px] font-semibold text-indigo-700 bg-indigo-100/70 px-2.5 py-0.5 rounded-lg">
-                      Target: {targetMateri} {targetHal ? `(Hal. ${targetHal})` : ''}
-                    </div>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
-                  {/* Field 1: Materi */}
-                  <div className="sm:col-span-2">
-                    <label className="text-[11px] font-bold text-slate-700 mb-1 block">
-                      Materi / Bab:
-                    </label>
-                    {availableUnits && availableUnits.length > 0 ? (
-                      <select
-                        value={materi}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setMateri(val);
-                          const found = availableUnits.find((u) => u.title === val || u.id === val);
-                          if (found && found.pageEnd) {
-                            setHal(Number(found.pageEnd));
-                          }
-                        }}
-                        className="w-full px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-800 focus:ring-2 focus:ring-amber-500 focus:outline-none"
-                      >
-                        {availableUnits.map((u) => (
-                          <option key={u.id} value={u.title}>
-                            {u.title} {u.pageStart ? `(Hal. ${u.pageStart} - ${u.pageEnd || '...'})` : ''}
-                          </option>
-                        ))}
-                        {!availableUnits.some((u) => u.title === materi) && materi && (
-                          <option value={materi}>{materi}</option>
-                        )}
-                      </select>
-                    ) : (
-                      <input
-                        type="text"
-                        placeholder="Nama Bab / Pembahasan..."
-                        value={materi}
-                        onChange={(e) => setMateri(e.target.value)}
-                        className="w-full px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-800 focus:ring-2 focus:ring-amber-500 focus:outline-none"
-                      />
-                    )}
-                  </div>
-
-                  {/* Field 2: Halaman (Hal) */}
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-700 mb-1 block">
-                      Halaman Selesai (Hal):
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      placeholder="Contoh: 15"
                       value={hal}
-                      onChange={(e) => setHal(e.target.value === '' ? '' : Number(e.target.value))}
-                      className="w-full px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-bold text-indigo-700 focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                      onChange={(e) => setHal(e.target.value)}
+                      placeholder="—"
+                      className="w-12 bg-transparent text-right font-bold text-slate-800 focus:outline-none text-xs"
                     />
                   </div>
                 </div>
-              </div>
 
-              {/* Section 2: Student Roll Call Toolbar */}
-              <div className="flex items-center justify-between flex-wrap gap-3">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                    <Users className="w-4 h-4 text-slate-600" />
-                    <span>Daftar Santri / Siswa</span>
-                    <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
-                      {students.length} Orang
-                    </span>
-                  </h3>
+                {/* 2. Teacher Attendance (Compact single row) */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Ustadz / Pengajar
+                    </div>
+                    <div className="text-xs font-bold text-slate-800 truncate">
+                      {data?.teacher.name || 'Pengampu'}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1 shrink-0">
+                    {(['Hadir', 'Izin', 'Sakit', 'Alpa'] as AttendanceStatus[]).map((status) => {
+                      const isActive = teacherStatus === status;
+                      return (
+                        <button
+                          key={status}
+                          type="button"
+                          onClick={() => setTeacherStatus(status)}
+                          className={`px-2 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                            isActive
+                              ? status === 'Hadir'
+                                ? 'bg-emerald-600 text-white'
+                                : status === 'Izin'
+                                ? 'bg-sky-600 text-white'
+                                : status === 'Sakit'
+                                ? 'bg-amber-500 text-white'
+                                : 'bg-rose-600 text-white'
+                              : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
+                          {status}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-2 flex-wrap">
-                  {/* Quick Mark All Present button */}
-                  <button
-                    type="button"
-                    onClick={handleMarkAllPresent}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 rounded-xl border border-emerald-300 shadow-2xs transition-colors cursor-pointer"
-                  >
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Tandai Semua Hadir</span>
-                  </button>
-
-                  {/* Search box */}
-                  <div className="relative">
+                {/* 3. Student Roster Search & Quick All-Hadir */}
+                <div className="flex items-center justify-between gap-2 pt-1">
+                  <div className="relative flex-1">
                     <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
-                      placeholder="Cari nama / NISN..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      className="pl-8 pr-3 py-1 rounded-xl border border-slate-200 bg-white text-xs placeholder:text-slate-400 focus:ring-2 focus:ring-amber-500 focus:outline-none w-36 sm:w-48"
+                      placeholder={`Cari dari ${students.length} santri...`}
+                      className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-amber-400 text-slate-800"
                     />
                   </div>
-                </div>
-              </div>
 
-              {/* Summary Stats Badges */}
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center text-xs">
-                <div className="p-2 rounded-xl bg-emerald-50 border border-emerald-200 font-bold text-emerald-800">
-                  <span className="text-base font-extrabold">{countHadir}</span> Hadir
+                  <button
+                    type="button"
+                    onClick={() => markAllStudents('Hadir')}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 rounded-xl text-xs font-bold transition-colors cursor-pointer shrink-0"
+                    title="Tandai semua santri hadir"
+                  >
+                    <UserCheck className="w-3.5 h-3.5" />
+                    <span>Semua Hadir</span>
+                  </button>
                 </div>
-                <div className="p-2 rounded-xl bg-sky-50 border border-sky-200 font-bold text-sky-800">
-                  <span className="text-base font-extrabold">{countIzin}</span> Izin
-                </div>
-                <div className="p-2 rounded-xl bg-amber-50 border border-amber-200 font-bold text-amber-800">
-                  <span className="text-base font-extrabold">{countSakit}</span> Sakit
-                </div>
-                <div className="p-2 rounded-xl bg-orange-50 border border-orange-200 font-bold text-orange-800">
-                  <span className="text-base font-extrabold">{countTerlambat}</span> Terlambat
-                </div>
-                <div className="p-2 rounded-xl bg-rose-50 border border-rose-200 font-bold text-rose-800 col-span-2 sm:col-span-1">
-                  <span className="text-base font-extrabold">{countAlpa}</span> Alpa
-                </div>
-              </div>
 
-              {/* High-density Student Roster Table */}
-              <div className="rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="bg-slate-100 text-slate-600 font-bold border-b border-slate-200 text-[11px] uppercase tracking-wider">
-                        <th className="py-2.5 px-3 w-10 text-center">#</th>
-                        <th className="py-2.5 px-3">Nama Santri</th>
-                        <th className="py-2.5 px-3 w-28">NISN / Gender</th>
-                        <th className="py-2.5 px-3 w-64 text-center">Status Kehadiran</th>
-                        <th className="py-2.5 px-3 w-44">Keterangan / Alasan</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 font-medium">
-                      {filteredStudents.length === 0 ? (
-                        <tr>
-                          <td colSpan={5} className="py-8 text-center text-slate-400">
-                            Tidak ada siswa yang ditemukan.
-                          </td>
-                        </tr>
-                      ) : (
-                        filteredStudents.map((std, idx) => (
-                          <tr
-                            key={std.studentId}
-                            className={`hover:bg-slate-50/80 transition-colors ${
-                              std.status ? 'bg-amber-50/60 ring-1 ring-inset ring-amber-200' : ''
-                            }`}
-                          >
-                            <td className="py-2 px-3 text-center text-slate-400 font-mono text-[11px]">
-                              {idx + 1}
-                            </td>
-                            <td className="py-2 px-3">
-                              <div className="font-bold text-slate-900">{std.name}</div>
-                            </td>
-                            <td className="py-2 px-3 text-slate-500 font-mono text-[11px]">
-                              <span className="mr-1.5">{std.nisn || '-'}</span>
-                              <span className="px-1.5 py-0.2 rounded text-[10px] bg-slate-100 font-sans font-bold">
-                                {std.gender === 'L' ? 'Ikhwan' : 'Akhwat'}
-                              </span>
-                            </td>
-                            <td className="py-2 px-3 text-center">
-                              {/* 5-status segmented toggle */}
-                              <div className="inline-flex items-center gap-0.5 bg-slate-100 p-0.5 rounded-lg border border-slate-200">
-                                {STATUS_OPTIONS.map((opt) => (
-                                  <button
-                                    key={opt.value}
-                                    type="button"
-                                    onClick={() => handleStudentStatusChange(std.studentId, opt.value)}
-                                    className={`px-2 py-0.5 text-[11px] font-bold rounded transition-all cursor-pointer ${
-                                      std.status === opt.value
-                                        ? opt.activeClass
-                                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-                                    }`}
-                                  >
-                                    {opt.label}
-                                  </button>
-                                ))}
+                {/* 4. Student Roster List */}
+                <div className="space-y-1.5">
+                  {filteredStudents.length === 0 ? (
+                    <div className="py-8 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                      Tidak ada santri yang cocok dengan pencarian
+                    </div>
+                  ) : (
+                    filteredStudents.map((student, idx) => (
+                      <div
+                        key={student.studentId}
+                        className={`p-2 rounded-xl border flex items-center justify-between gap-2 transition-colors ${
+                          student.status === 'Hadir'
+                            ? 'bg-emerald-50/40 border-emerald-200'
+                            : student.status
+                            ? 'bg-slate-50 border-slate-200'
+                            : 'bg-white border-slate-200/80 hover:border-slate-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-[10px] font-mono font-bold text-slate-400 w-4 text-right shrink-0">
+                            {idx + 1}
+                          </span>
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold text-slate-800 truncate">
+                              {student.name}
+                            </div>
+                            {student.nisn && (
+                              <div className="text-[10px] font-mono text-slate-400 truncate">
+                                {student.nisn}
                               </div>
-                            </td>
-                            <td className="py-2 px-3">
-                              <input
-                                type="text"
-                                placeholder={std.status !== 'Hadir' ? 'Tuliskan alasan...' : 'Catatan opsional'}
-                                value={std.note || ''}
-                                onChange={(e) => handleStudentNoteChange(std.studentId, e.target.value)}
-                                className={`w-full px-2 py-1 rounded-lg border text-xs placeholder:text-slate-400 focus:ring-1 focus:ring-amber-500 focus:outline-none transition-colors ${
-                                  std.status !== 'Hadir' && !std.note
-                                    ? 'border-amber-300 bg-amber-50/40'
-                                    : 'border-slate-200 bg-white'
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Status buttons */}
+                        <div className="flex items-center gap-1 shrink-0">
+                          {STATUS_OPTIONS.map((opt) => {
+                            const isSelected = student.status === opt.value;
+                            return (
+                              <button
+                                key={opt.value}
+                                type="button"
+                                onClick={() => setStudentStatus(student.studentId, opt.value)}
+                                className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                                  isSelected
+                                    ? opt.activeClass
+                                    : 'bg-white border border-slate-200 text-slate-500 hover:bg-slate-100'
                                 }`}
-                              />
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
+                              >
+                                {opt.value[0]}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
-              </div>
 
-              {/* Section 3: Meeting General Note */}
-              <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 block">
-                  Catatan Sesi / Rangkuman Pembelajaran (Opsional):
-                </label>
-                <textarea
-                  rows={2}
-                  placeholder="e.g. Pembahasan bab 3 selesai, materi lanjutan diadakan pekan depan..."
-                  value={meetingNotes}
-                  onChange={(e) => setMeetingNotes(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs placeholder:text-slate-400 focus:ring-2 focus:ring-amber-500 focus:outline-none resize-none"
-                />
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* Modal Footer */}
-        <div className="px-5 py-4 border-t border-slate-100 bg-slate-50/70 flex items-center justify-between gap-3">
-          <div className="text-xs text-slate-500 font-medium">
-            {saveSuccess ? (
-              <span className="text-emerald-700 font-bold flex items-center gap-1.5 animate-in fade-in">
-                <Check className="w-4 h-4 text-emerald-600" />
-                Presensi berhasil disimpan ke database!
-              </span>
-            ) : (
-              <span>Perubahan akan disimpan permanen ke server Turso</span>
+                {/* Live draft indicator at bottom */}
+                <div className="text-[10px] text-slate-400 text-center py-2">
+                  {hasDraft ? (
+                    <span className="text-amber-600 font-semibold">
+                      Perubahan tersimpan otomatis di draft lokal
+                    </span>
+                  ) : (
+                    <span>Tersinkronisasi dengan server</span>
+                  )}
+                </div>
+              </>
             )}
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={saving}
-              className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 rounded-xl transition-colors cursor-pointer"
-            >
-              Batal
-            </button>
-            {/* Save draft button is redundant since now it is saved automatically
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={saving || loading || !data}
-              className="flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-white bg-amber-500 hover:bg-amber-600 rounded-xl shadow-xs transition-all cursor-pointer disabled:opacity-50"
-            >
-              {saving ? (
-                <>
-                  <Clock className="w-3.5 h-3.5 animate-spin" />
-                  <span>Menyimpan...</span>
-                </>
-              ) : saveSuccess ? (
-                <>
-                  <Check className="w-3.5 h-3.5" />
-                  <span>Tersimpan!</span>
-                </>
-              ) : (
-                <>
-                  <Save className="w-3.5 h-3.5" />
-                  <span>Simpan Presensi</span>
-                </>
-              )}
-            </button> */}
           </div>
         </div>
       </div>

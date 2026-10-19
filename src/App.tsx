@@ -20,6 +20,7 @@ import { EnrollmentView } from './components/attendance/EnrollmentView';
 import { RuleManagerView } from './components/ruleManager/RuleManagerView';
 import { parseUrlRoute, updateUrlRoute } from './utils/routing';
 import { useAttendancePendingStore } from './utils/useAttendancePendingStore';
+import type { ViewerRole } from './types/viewer';
 
 const defaultEmptyDb: DatabaseState = {
   classes: [],
@@ -206,8 +207,9 @@ export default function App() {
     updateUrlRoute('rule-manager', viewerRole, viewerId, 'push');
   };
 
-  const handleNavigateToJournal = () => {
+  const handleNavigateToJournal = (_subjectId?: string, _classId?: string, _date?: string) => {
     setKaldikMode('jurnal');
+    setActiveTab('kaldik');
   };
 
   const handleNavigateToBooks = (bookId?: string) => {

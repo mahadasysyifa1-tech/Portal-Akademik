@@ -480,23 +480,3 @@ export interface AttendanceRollCallData {
   teacher: AttendanceRollCallTeacher;
   students: AttendanceRollCallStudent[];
 }
-
-export interface GenerateMeetingsOptions {
-  startDate?: string;
-  endDate?: string;
-  periodId?: string;
-  skipHolidays?: boolean;
-  overwriteScheduled?: boolean;
-}
-
-export interface GenerateMeetingsResult {
-  success: boolean;
-  totalDaysProcessed: number;
-  totalCreated: number;
-  totalUpdated: number;
-  totalPreserved: number;
-  totalSkippedHolidays: number;
-  startDate: string;
-  endDate: string;
-  message: string;
-}

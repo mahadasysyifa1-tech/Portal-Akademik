@@ -504,26 +504,6 @@ export async function updateMeetingStatus(
       sql: `UPDATE attnd_meeting SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
       args: [status, meetingId],
     },
-    {
-      sql: `INSERT INTO attnd_month_cache (date_str, total_sessions, completed_sessions, hadir_students, absent_students, updated_at)
-            SELECT 
-              m.meeting_date,
-              COUNT(*),
-              SUM(CASE WHEN m.status = 'completed' THEN 1 ELSE 0 END),
-              SUM(COALESCE(m.present_count, 0)),
-              SUM(COALESCE(m.absent_count, 0)),
-              CURRENT_TIMESTAMP
-            FROM attnd_meeting m
-            WHERE m.meeting_date = (SELECT meeting_date FROM attnd_meeting WHERE id = ?)
-            GROUP BY m.meeting_date
-            ON CONFLICT(date_str) DO UPDATE SET
-              total_sessions = excluded.total_sessions,
-              completed_sessions = excluded.completed_sessions,
-              hadir_students = excluded.hadir_students,
-              absent_students = excluded.absent_students,
-              updated_at = CURRENT_TIMESTAMP`,
-      args: [meetingId],
-    },
   ];
   await client.batch(statements, 'write');
 }
@@ -607,28 +587,6 @@ export async function saveMeetingRollCall(
       args: [meetingId, s.studentId, s.status, s.timestampStart || null, s.timestampEnd || null, s.note || null],
     });
   }
-
-  // Atomically refresh the day's record in attnd_month_cache
-  statements.push({
-    sql: `INSERT INTO attnd_month_cache (date_str, total_sessions, completed_sessions, hadir_students, absent_students, updated_at)
-          SELECT 
-            m.meeting_date,
-            COUNT(*),
-            SUM(CASE WHEN m.status = 'completed' THEN 1 ELSE 0 END),
-            SUM(COALESCE(m.present_count, 0)),
-            SUM(COALESCE(m.absent_count, 0)),
-            CURRENT_TIMESTAMP
-          FROM attnd_meeting m
-          WHERE m.meeting_date = (SELECT meeting_date FROM attnd_meeting WHERE id = ?)
-          GROUP BY m.meeting_date
-          ON CONFLICT(date_str) DO UPDATE SET
-            total_sessions = excluded.total_sessions,
-            completed_sessions = excluded.completed_sessions,
-            hadir_students = excluded.hadir_students,
-            absent_students = excluded.absent_students,
-            updated_at = CURRENT_TIMESTAMP`,
-    args: [meetingId],
-  });
 
   await client.batch(statements, 'write');
 }
@@ -767,27 +725,6 @@ export async function batchSaveAttendance(
         sql: `UPDATE attnd_meeting SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
         args: [update.status, update.meetingId],
       });
-      // Sync cache for meeting's date
-      statements.push({
-        sql: `INSERT INTO attnd_month_cache (date_str, total_sessions, completed_sessions, hadir_students, absent_students, updated_at)
-              SELECT 
-                m.meeting_date,
-                COUNT(*),
-                SUM(CASE WHEN m.status = 'completed' THEN 1 ELSE 0 END),
-                SUM(COALESCE(m.present_count, 0)),
-                SUM(COALESCE(m.absent_count, 0)),
-                CURRENT_TIMESTAMP
-              FROM attnd_meeting m
-              WHERE m.meeting_date = (SELECT meeting_date FROM attnd_meeting WHERE id = ?)
-              GROUP BY m.meeting_date
-              ON CONFLICT(date_str) DO UPDATE SET
-                total_sessions = excluded.total_sessions,
-                completed_sessions = excluded.completed_sessions,
-                hadir_students = excluded.hadir_students,
-                absent_students = excluded.absent_students,
-                updated_at = CURRENT_TIMESTAMP`,
-        args: [update.meetingId],
-      });
       updatedCount++;
     }
   }
@@ -855,26 +792,6 @@ export async function batchSaveAttendance(
         });
       }
 
-      statements.push({
-        sql: `INSERT INTO attnd_month_cache (date_str, total_sessions, completed_sessions, hadir_students, absent_students, updated_at)
-              SELECT 
-                m.meeting_date,
-                COUNT(*),
-                SUM(CASE WHEN m.status = 'completed' THEN 1 ELSE 0 END),
-                SUM(COALESCE(m.present_count, 0)),
-                SUM(COALESCE(m.absent_count, 0)),
-                CURRENT_TIMESTAMP
-              FROM attnd_meeting m
-              WHERE m.meeting_date = (SELECT meeting_date FROM attnd_meeting WHERE id = ?)
-              GROUP BY m.meeting_date
-              ON CONFLICT(date_str) DO UPDATE SET
-                total_sessions = excluded.total_sessions,
-                completed_sessions = excluded.completed_sessions,
-                hadir_students = excluded.hadir_students,
-                absent_students = excluded.absent_students,
-                updated_at = CURRENT_TIMESTAMP`,
-        args: [meetingId],
-      });
       updatedCount++;
     }
   }
