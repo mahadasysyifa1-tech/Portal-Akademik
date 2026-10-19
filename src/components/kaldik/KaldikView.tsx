@@ -86,7 +86,7 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
   const [eventModalDefaultDate, setEventModalDefaultDate] = useState<string | undefined>(undefined);
   const [activeAttendance, setActiveAttendance] = useState<{ slot: ResolvedSlot; meeting?: any } | null>(null);
 
-  const { monthMeetingsMap, monthSummary } = useMonthMeetings(currentYear, currentMonth + 1);
+  const { monthMeetingsMap } = useMonthMeetings(currentYear, currentMonth + 1);
 
   const selectedDayMeetings = useMemo(
     () => monthMeetingsMap.get(selectedDateStr) || [],
@@ -254,6 +254,13 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
 
   const showKaldikAdmin = mode === 'kaldik' && isAdmin;
 
+  const setStatusOrClear = (meetingId: string, next: 'scheduled' | 'cancelled') => {
+    const dbStatus =
+    [...monthMeetingsMap.values()].flat().find((m: any) => m.id === meetingId)?.status || 'scheduled';
+    if (next === dbStatus) store.discardDraft(meetingId);
+    else store.setSessionStatusDraft(meetingId, next);
+  };
+
   return (
     <div className="space-y-4">
       {mode === 'jurnal' && isAdmin && (
@@ -302,7 +309,6 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
         onSelectDate={setSelectedDateStr}
         onQuickAddEvent={(dateStr) => openEventModal(dateStr)}
         monthMeetingsMap={monthMeetingsMap}
-        monthSummary={monthSummary}
         store={store}
       />
 
@@ -351,10 +357,10 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
               meetingsForDay={selectedDayMeetings}
               getEffectiveStatus={store.getEffectiveStatus}
               isMeetingDrafted={store.isMeetingDrafted}
-              onToggleSessionStatus={(meetingId, currentStatus) => {
-                const next = currentStatus === 'cancelled' ? 'scheduled' : 'cancelled';
-                store.setSessionStatusDraft(meetingId, next);
-              }}
+              onToggleSessionStatus={(meetingId, currentStatus) =>
+                setStatusOrClear(meetingId, currentStatus === 'cancelled' ? 'scheduled' : 'cancelled')
+              }
+              onDiscardSessionDraft={(meetingId) => store.discardDraft(meetingId)}
               onOpenAttendanceModal={(slot, meeting) => setActiveAttendance({ slot, meeting })}
             />
           )}
@@ -380,6 +386,9 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
             initialDraft={store.getRollCallDraft(meetingId)}
             onSaveDraft={(payload) => store.setRollCallDraft(meetingId, payload)}
             onDiscardDraft={() => store.discardDraft(meetingId)}
+            getEffectiveStatus={store.getEffectiveStatus}
+            hasDraft={store.isMeetingDrafted(meetingId)}
+            onSetSessionStatus={(id, next) => store.setSessionStatusDraft(id, next)}
             targetMateri={titles || undefined}
             targetHal={typeof maxPage === 'number' ? maxPage : parseInt(String(maxPage), 10) || undefined}
             targetUnitId={units[0]?.id}

@@ -685,7 +685,7 @@ export async function saveMeetingRollCall(
   // Update meeting status and helper summary columns in one atomic write
   statements.push({
     sql: `UPDATE attnd_meeting 
-          SET status = 'completed', 
+          SET status = CASE WHEN status = 'cancelled' THEN 'cancelled' ELSE 'completed' END,
               notes = ?, 
               present_count = ?, 
               absent_count = ?, 
@@ -935,7 +935,7 @@ export async function batchSaveAttendance(
 
       statements.push({
         sql: `UPDATE attnd_meeting 
-              SET status = 'completed',
+              SET status = CASE WHEN status = 'cancelled' THEN 'cancelled' ELSE 'completed' END,
                   notes = ?, 
                   present_count = ?, 
                   absent_count = ?, 

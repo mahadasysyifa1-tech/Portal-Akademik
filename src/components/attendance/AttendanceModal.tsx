@@ -20,6 +20,7 @@ import { getCachedRollCall } from '../../utils/rollCallCache';
 interface AttendanceModalProps {
   meetingId: string;
   isOpen: boolean;
+  hasDraft: boolean;
   onClose: () => void;
   onSaved?: () => void;
   targetMateri?: string;
@@ -29,6 +30,8 @@ interface AttendanceModalProps {
   initialDraft?: PendingRollCallLog;
   onSaveDraft?: (draftPayload: any) => void;
   onDiscardDraft?: (meetingId: string) => void;
+  getEffectiveStatus?: (meetingId: string, dbStatus: string) => string;
+  onSetSessionStatus?: (meetingId: string, status: 'scheduled' | 'cancelled') => void;
 }
 
 
@@ -51,7 +54,10 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   availableUnits = [],
   initialDraft,
   onSaveDraft,
-  onDiscardDraft
+  onDiscardDraft,
+  getEffectiveStatus,
+  onSetSessionStatus,
+  hasDraft
 }) => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -120,6 +126,31 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     lastDraftRef.current = null;
     onDiscardDraft?.(meetingId);
     setReloadKey((k) => k + 1);
+  };
+
+  const autoCancelledRef = useRef(false);
+  const effectiveStatus =
+  meetingId && getEffectiveStatus
+  ? getEffectiveStatus(meetingId, data?.meeting.status || 'scheduled')
+  : data?.meeting.status || 'scheduled';
+  const isCancelled = effectiveStatus === 'cancelled';
+
+  const handleToggleCancel = () => {
+    if (!meetingId) return;
+    autoCancelledRef.current = false;
+    onSetSessionStatus?.(meetingId, isCancelled ? 'scheduled' : 'cancelled');
+  };
+
+  const handleTeacherStatusChange = (next: AttendanceStatus | null) => {
+    setTeacherStatus(next);
+    if (!meetingId) return;
+    if ((next === 'Izin' || next === 'Sakit' || next === 'Alpa') && !isCancelled) {
+      autoCancelledRef.current = true;
+      onSetSessionStatus?.(meetingId, 'cancelled');
+    } else if (autoCancelledRef.current && (next === 'Hadir' || next === 'Terlambat')) {
+      autoCancelledRef.current = false;
+      onSetSessionStatus?.(meetingId, 'scheduled');
+    }
   };
 
   // Fetch meeting data & current roll call logs
@@ -405,7 +436,8 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
           ) : (
             <>
               {/* Section 1: Teacher Presence */}
-              {initialDraft && (
+              {/* Draft Banner */}
+              {(initialDraft || hasDraft) && (
                 <div className="flex items-center justify-between gap-3 px-4 py-2 rounded-xl bg-amber-50 border border-amber-200 text-xs font-bold text-amber-800">
                   <span>Draft belum disimpan ke database</span>
                   <button
@@ -417,6 +449,21 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                   </button>
                 </div>
               )}
+              {/* Cancel Session Button */}
+              <div className="flex justify-end">
+                <button
+                type="button"
+                onClick={handleToggleCancel}
+                className={`px-3 py-1.5 text-xs font-bold rounded-lg border cursor-pointer ${
+                  isCancelled
+                  ? 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
+                  : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                }`}
+                >
+                  {isCancelled ? 'Pulihkan Sesi' : 'Batalkan Sesi'}
+                </button>
+              </div>
+              {/* Teacher Row */}
               <div
               className={`p-4 rounded-2xl border transition-colors ${
                 teacherStatus
@@ -445,7 +492,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                       <button
                         key={opt.value}
                         type="button"
-                        onClick={() => setTeacherStatus((prev) => (prev === opt.value ? null : opt.value))}
+                        onClick={() => handleTeacherStatusChange(teacherStatus === opt.value ? null : opt.value)}
                         className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
                           teacherStatus === opt.value ? opt.activeClass : opt.inactiveClass
                         }`}

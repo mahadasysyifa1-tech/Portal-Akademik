@@ -14,7 +14,6 @@ export interface KaldikMonthGridProps {
   onSelectDate: (dateStr: string) => void;
   onQuickAddEvent: (dateStr: string) => void;
   monthMeetingsMap: Map<string, any[]>;
-  monthSummary: Record<string, any>;
   store: AttendancePendingStore;
 }
 
@@ -28,9 +27,7 @@ interface DayCompletion {
 
 function getDayCompletion(
   dateStr: string,
-  slotCount: number,
   monthMeetingsMap: Map<string, any[]>,
-  monthSummary: Record<string, any>,
   store: AttendancePendingStore
 ): DayCompletion {
   const dayMeetings = monthMeetingsMap.get(dateStr) || [];
@@ -53,7 +50,6 @@ export const KaldikMonthGrid: React.FC<KaldikMonthGridProps> = ({
   onSelectDate,
   onQuickAddEvent,
   monthMeetingsMap,
-  monthSummary,
   store
 }) => {
   return (
@@ -79,7 +75,7 @@ export const KaldikMonthGrid: React.FC<KaldikMonthGridProps> = ({
           const holidayEvent = d.events.find((e) => e.type === 'holiday');
           const completion =
             mode === 'jurnal' && d.isCurrentMonth
-              ? getDayCompletion(d.dateStr, d.classSlots.length, monthMeetingsMap, monthSummary, store)
+              ? getDayCompletion(d.dateStr, monthMeetingsMap, store)
               : null;
 
           return (

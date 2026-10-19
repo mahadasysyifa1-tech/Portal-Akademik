@@ -58,6 +58,7 @@ interface SlotStatusActionsProps {
   isDraft: boolean;
   onOpenAttendance?: () => void;
   onToggleStatus?: () => void;
+  onDiscardSessionDraft?: (meetingId: string) => void;
 }
 
 const SlotStatusActions: React.FC<SlotStatusActionsProps> = ({
@@ -133,7 +134,8 @@ export const KaldikDayMatrix: React.FC<KaldikDayMatrixProps> = ({
   getEffectiveStatus,
   isMeetingDrafted,
   onOpenAttendanceModal,
-  onToggleSessionStatus
+  onToggleSessionStatus,
+  onDiscardSessionDraft
 }) => {
   const dateStr = selectedDayData.dateStr;
 
@@ -167,7 +169,7 @@ export const KaldikDayMatrix: React.FC<KaldikDayMatrixProps> = ({
     const sub = subjectMap.get(slot.subjectId);
     const tch = teacherMap.get(slot.teacherId);
     const rm = roomMap.get(slot.roomId);
-    const { status, isDraft } = getMeetingInfo(cls.id, session.id);
+    const { meetingId, status, isDraft } = getMeetingInfo(cls.id, session.id);
     const statusDesc =
       status === 'completed'
         ? 'Presensi Selesai'
@@ -177,6 +179,7 @@ export const KaldikDayMatrix: React.FC<KaldikDayMatrixProps> = ({
 
     return {
       id: `${slot.ruleId}_${cls.id}`,
+      meetingId,
       label: cls.name,
       isFilled: true,
       occupied: true,
@@ -200,6 +203,15 @@ export const KaldikDayMatrix: React.FC<KaldikDayMatrixProps> = ({
       const { meeting } = getMeetingInfo(block.slot.classId, block.slot.sessionId);
       onOpenAttendanceModal?.(block.slot, meeting);
     }
+  };
+  const handleBadgeClick = (block: FixedBlockState) => {
+    if (!block.isFilled || !block.meetingId) return;
+    if (block.isDraft) {
+      onDiscardSessionDraft?.(block.meetingId);
+      return;
+    }
+    if (block.attendanceStatus === 'completed') return;
+    onToggleSessionStatus?.(block.meetingId, block.attendanceStatus || 'scheduled');
   };
 
   return (
@@ -255,6 +267,7 @@ export const KaldikDayMatrix: React.FC<KaldikDayMatrixProps> = ({
                         count={sortedClasses.length}
                         interactive={true}
                         onBlockClick={handleBlockClick}
+                        onBadgeClick={handleBadgeClick}
                         getStateFn={(classIndex) => buildCellState(session, sortedClasses[classIndex])}
                       />
                     </td>
