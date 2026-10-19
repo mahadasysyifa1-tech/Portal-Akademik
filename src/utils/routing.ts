@@ -1,5 +1,5 @@
 import { ActiveTabType } from '../components/Header';
-import { ViewerRole } from '../components/JournalView';
+import type { ViewerRole } from '../types/viewer';
 import { ScheduleViewMode } from '../components/CalendarView';
 import { DatabaseState } from '../types';
 

@@ -7,7 +7,7 @@ import {
 } from '../types';
 import { CalendarView, ScheduleViewMode } from './CalendarView';
 import { RuleForm } from './RuleForm';
-import { ViewerRole } from './JournalView';
+import type { ViewerRole } from '../types/viewer';
 
 interface UnifiedStudioProps {
   db: DatabaseState;

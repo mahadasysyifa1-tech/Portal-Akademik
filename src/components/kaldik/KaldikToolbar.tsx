@@ -2,7 +2,7 @@ import React from 'react';
 import { ChevronLeft, ChevronRight, Plus, Filter, Layers } from 'lucide-react';
 import type { Period } from '../../types';
 import { INDONESIAN_MONTHS } from '../../utils/kaldikCalendar';
-import { KaldikModeSwitch, type KaldikMode } from './KaldikModeSwitch';
+import type { KaldikMode } from './KaldikModeSwitch';
 
 export interface KaldikToolbarProps {
   currentYear: number;
@@ -108,8 +108,6 @@ export const KaldikToolbar: React.FC<KaldikToolbarProps> = ({
           >
             Hari Ini
           </button>
-
-          <KaldikModeSwitch mode={mode} onChange={onModeChange} />
         </div>
 
         {/* Collapsible filters */}

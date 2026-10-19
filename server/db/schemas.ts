@@ -370,16 +370,4 @@ CREATE INDEX IF NOT EXISTS idx_log_person ON attnd_meeting_log(person_type, pers
 CREATE INDEX IF NOT EXISTS idx_log_status ON attnd_meeting_log(status);
 CREATE INDEX IF NOT EXISTS idx_log_covering ON attnd_meeting_log(meeting_id, person_type, status);
 
-CREATE TABLE IF NOT EXISTS attnd_month_cache (
-    date_str TEXT PRIMARY KEY,
-    total_sessions INTEGER NOT NULL DEFAULT 0,
-    completed_sessions INTEGER NOT NULL DEFAULT 0,
-    hadir_students INTEGER NOT NULL DEFAULT 0,
-    absent_students INTEGER NOT NULL DEFAULT 0,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_month_cache_date ON attnd_month_cache(date_str);
-`;
-
 export const UNIFIED_SCHEMA_SQL = `${METADATA_SCHEMA_SQL}\n${KALDIK_SCHEMA_SQL}\n${ATTENDANCE_SCHEMA_SQL}`;

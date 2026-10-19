@@ -13,7 +13,6 @@ import { EntityManager } from './components/EntityManager';
 import { RuleModal } from './components/RuleModal';
 import { AdminLoginModal } from './components/AdminLoginModal';
 import { HomeTab } from './components/HomeTab';
-import { JournalView, ViewerRole } from './components/JournalView';
 import { SyllabusView } from './components/SyllabusView';
 import { ExportImportView } from './components/ExportImportView';
 import { KaldikView } from './components/kaldik/KaldikView';
@@ -84,6 +83,7 @@ export default function App() {
   const editVersion = useRef(0);
   const [showRules, setShowRules] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [kaldikMode, setKaldikMode] = useState<'kaldik' | 'jurnal'>('kaldik');
   const [editingRule, setEditingRule] = useState<ScheduleRule | null>(null);
   const [slotPrefill, setSlotPrefill] = useState<{
     day?: DayOfWeek;
@@ -206,14 +206,8 @@ export default function App() {
     updateUrlRoute('rule-manager', viewerRole, viewerId, 'push');
   };
 
-  const handleNavigateToJournal = (subjectId?: string, classId?: string, date?: string) => {
-    if (subjectId) {
-      setJournalNavParams({ subjectId, classId, date });
-    } else {
-      setJournalNavParams(null);
-    }
-    setActiveTab('journal');
-    updateUrlRoute('journal', viewerRole, viewerId, 'push');
+  const handleNavigateToJournal = () => {
+    setKaldikMode('jurnal');
   };
 
   const handleNavigateToBooks = (bookId?: string) => {
@@ -232,6 +226,10 @@ export default function App() {
     updateUrlRoute('subjects', viewerRole, viewerId, 'push');
   };
 
+  const selectKaldikView = (view: 'kaldik' | 'jurnal') => {
+    setKaldikMode(view);
+    setActiveTab('kaldik');
+  };
   const handleTabChange = (tab: ActiveTabType) => {
     // Navigating between tabs clears all 1-time deep link tokens
     setJournalNavParams(null);
@@ -240,6 +238,14 @@ export default function App() {
     setActiveTab(tab);
     updateUrlRoute(tab, viewerRole, viewerId, 'push', tab === 'studio' ? studioViewMode : undefined);
   };
+
+  // Catch Journal routes
+  useEffect(() => {
+    if (activeTab === 'journal' || activeTab === 'presensi') {
+      setKaldikMode('jurnal');
+      setActiveTab('kaldik');
+    }
+  }, [activeTab]);
 
   // Sync token in localStorage & URL
   useEffect(() => {
@@ -636,6 +642,8 @@ export default function App() {
       <Header
         activeTab={activeTab}
         setActiveTab={handleTabChange}
+        kaldikMode={kaldikMode}
+        onSelectKaldikView={selectKaldikView}
         onSelectDatabaseSubTab={(subTab) => {
           setDatabaseSubTab(subTab);
           handleTabChange('database');
@@ -710,35 +718,7 @@ export default function App() {
             onNavigateToJournal={handleNavigateToJournal}
             onNavigateToBooks={handleNavigateToBooks}
             pendingStore={attendancePendingStore}
-          />
-        )}
-
-        {/* Jurnal Tab (Unified Sesi, Presensi & Catatan KBM) */}
-        {(activeTab === 'journal' || activeTab === 'presensi') && (
-          <JournalView
-            db={db}
-            isAdmin={isAdmin}
-            onOpenAdminLogin={handleOpenAdminLogin}
-            viewerRole={viewerRole}
-            setViewerRole={handleSetViewerRole}
-            viewerId={viewerId}
-            setViewerId={handleSetViewerId}
-            initialDate={attendanceNavParams.date || journalNavParams?.date}
-            initialClassId={attendanceNavParams.classId || journalNavParams?.classId}
-            initialSessionId={attendanceNavParams.sessionId}
-            initialSubjectId={journalNavParams?.subjectId}
-            onClearDeepLink={() => {
-              setAttendanceNavParams({});
-              setJournalNavParams(null);
-            }}
-            onNavigateToEnrollment={() => handleTabChange('enrollment')}
-            onNavigateToRuleManager={() => handleTabChange('rule-manager')}
-            onNavigateToSyllabusScope={handleNavigateToSyllabusScope}
-            onNavigateToSyllabus={(subjectId, classId) => {
-              setJournalNavParams(subjectId || classId ? { subjectId, classId } : null);
-              handleTabChange('syllabus');
-            }}
-            onNavigateToBooks={handleNavigateToBooks}
+            initialMode={kaldikMode}
           />
         )}
 

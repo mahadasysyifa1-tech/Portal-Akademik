@@ -26,7 +26,7 @@ import {
   getViewerScheduledSessions,
   get_units_for_session
 } from '../utils/pacingEngine';
-import { ViewerRole } from './JournalView';
+import type { ViewerRole } from '../types/viewer';
 const DAY_LABELS: Record<DayOfWeek, string> = {
   Monday: 'Senin',
   Tuesday: 'Selasa',

@@ -41,6 +41,8 @@ export type DatabaseSubTab =
 interface HeaderProps {
   activeTab: ActiveTabType;
   setActiveTab: (tab: ActiveTabType) => void;
+  kaldikMode: 'kaldik' | 'jurnal';
+  onSelectKaldikView: (view: 'kaldik' | 'jurnal') => void;
   onSelectDatabaseSubTab?: (subTab: DatabaseSubTab) => void;
   conflicts: ScheduleConflict[];
   showRules?: boolean;
@@ -56,6 +58,8 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   activeTab,
   setActiveTab,
+  kaldikMode,
+  onSelectKaldikView,
   onSelectDatabaseSubTab,
   conflicts,
   showRules,
@@ -204,7 +208,7 @@ export const Header: React.FC<HeaderProps> = ({
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
               }`}
             >
-              <CalendarClock className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+              <ClipboardCheck className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
               <span>
                 {activeTab === 'studio' ? 'Jadwal' : ''}
               </span>
@@ -214,33 +218,33 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               id="tab-btn-kaldik"
               type="button"
-              onClick={() => setActiveTab('kaldik')}
+              onClick={() => onSelectKaldikView('kaldik')}
               className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold rounded-xl transition-all cursor-pointer whitespace-nowrap ${
-                activeTab === 'kaldik'
+                activeTab === 'kaldik' && kaldikMode === 'kaldik'
                   ? 'bg-amber-500 text-white shadow-xs font-bold'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
               }`}
             >
               <CalendarDays className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
               <span>
-                {activeTab === 'kaldik' ? 'Kaldik' : ''}
+                {activeTab === 'kaldik' && kaldikMode === 'kaldik' ? 'Kaldik' : ''}
               </span>
             </button>
 
-            {/* Primary Tab: Jurnal (Unified KBM & Session Management) */}
+            {/* Primary Tab: Jurnal (KaldikView.tsx in Jurnal mode) */}
             <button
               id="tab-btn-journal"
               type="button"
-              onClick={() => setActiveTab('journal')}
+              onClick={() => onSelectKaldikView('jurnal')}
               className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold rounded-xl transition-all cursor-pointer whitespace-nowrap ${
-                activeTab === 'journal' || activeTab === 'presensi'
+                activeTab === 'kaldik' && kaldikMode === 'jurnal'
                   ? 'bg-amber-500 text-white shadow-xs font-bold'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
               }`}
             >
-              <ClipboardCheck className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+              <CalendarClock className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
               <span>
-                {activeTab === 'journal' || activeTab === 'presensi' ? 'Jurnal' : ''}
+                {activeTab === 'kaldik' && kaldikMode === 'jurnal' ? 'Jurnal' : ''}
               </span>
             </button>
 
