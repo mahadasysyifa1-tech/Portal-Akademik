@@ -585,7 +585,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
       {/* Slide-Over Drawer Container */}
       <div className="fixed inset-y-0 right-0 max-w-full flex items-end sm:items-start pl-0 sm:pl-10 pointer-events-none">
         <div
-          className={`pointer-events-auto w-screen max-w-md sm:max-w-xl h-[70dvh] border border-white sm:h-full mt-auto sm:mt-0 rounded-2xl sm:rounded-none shadow-2xl flex flex-col transition-all duration-300 animate-in slide-in-from-right ${
+          className={`pointer-events-auto w-screen max-w-md sm:max-w-xl h-[60dvh] border border-white sm:h-full mt-auto sm:mt-0 rounded-t-2xl sm:rounded-none shadow-2xl flex flex-col transition-all duration-300 animate-in slide-in-from-right ${
             isCancelled
               ? 'bg-slate-400 text-slate-600'
               : 'bg-white'

@@ -291,8 +291,8 @@ export const KaldikMonthGrid: React.FC<KaldikMonthGridProps> = ({
                       heightPercent > 50
                         ? 'bg-emerald-500'
                         : heightPercent > 25
-                        ? 'bg-amber-400'
-                        : 'bg-slate-300'
+                        ? 'bg-emerald-300'
+                        : 'bg-emerald-100'
                     }`}
                   />
                 ))}
@@ -330,16 +330,16 @@ export const KaldikMonthGrid: React.FC<KaldikMonthGridProps> = ({
                       className="bg-emerald-500 h-full"
                     />
                   )}
-                  {stats.scheduledMeetings > 0 && (
-                    <div
-                      style={{ width: `${(stats.scheduledMeetings / stats.totalMeetings) * 100}%` }}
-                      className="bg-amber-400 h-full"
-                    />
-                  )}
                   {stats.cancelledMeetings > 0 && (
                     <div
                       style={{ width: `${(stats.cancelledMeetings / stats.totalMeetings) * 100}%` }}
-                      className="bg-slate-300 h-full"
+                      className="bg-slate-400 h-full"
+                    />
+                  )}
+                  {stats.scheduledMeetings > 0 && (
+                    <div
+                      style={{ width: `${(stats.scheduledMeetings / stats.totalMeetings) * 100}%` }}
+                      className="bg-slate-200 h-full"
                     />
                   )}
                 </div>
