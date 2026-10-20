@@ -362,6 +362,14 @@ export const KaldikMonthGrid: React.FC<KaldikMonthGridProps> = ({
       {isWeekSelected && (
         <div className="block lg:hidden border-b border-slate-200 bg-slate-50/90 p-1.5">
           <div className="flex items-center justify-between gap-1">
+
+            <div className="grid grid-cols-7 gap-1 flex-1">
+              {mobileWeekDays.map((d) => renderCell(d, true))}
+            </div>
+
+          </div>
+
+          <div className="flex items-center justify-between px-2 pt-1.5 text-[10px] text-slate-400">
             <button
               type="button"
               onClick={handlePrevDay}
@@ -370,10 +378,16 @@ export const KaldikMonthGrid: React.FC<KaldikMonthGridProps> = ({
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
-
-            <div className="grid grid-cols-7 gap-1 flex-1">
-              {mobileWeekDays.map((d) => renderCell(d, true))}
-            </div>
+            <span className="flex gap-1">Ketuk tanggal aktif lagi untuk
+              <button
+                type="button"
+                onClick={() => onSelectDate('')}
+                className="flex items-center gap-1 font-semibold text-amber-700 hover:text-amber-800 cursor-pointer"
+              >
+                <Maximize2 className="w-3 h-3" />
+                <span>Buka Kalender</span>
+              </button>
+            </span>
 
             <button
               type="button"
@@ -382,18 +396,6 @@ export const KaldikMonthGrid: React.FC<KaldikMonthGridProps> = ({
               title="Hari Berikutnya"
             >
               <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="flex items-center justify-between px-2 pt-1.5 text-[10px] text-slate-400">
-            <span>Ketuk tanggal aktif untuk kalender penuh</span>
-            <button
-              type="button"
-              onClick={() => onSelectDate('')}
-              className="flex items-center gap-1 font-semibold text-amber-700 hover:text-amber-800 cursor-pointer"
-            >
-              <Maximize2 className="w-3 h-3" />
-              <span>Buka Kalender</span>
             </button>
           </div>
         </div>

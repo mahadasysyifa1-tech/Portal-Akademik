@@ -71,7 +71,7 @@ const SlotStatusActions: React.FC<SlotStatusActionsProps> = ({
   const draftTag = isDraft ? ' (Draft)' : '';
 
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex flex-col items-center gap-1.5">
       {status === 'completed' ? (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-300">
           ✓ Selesai{draftTag}
@@ -219,16 +219,6 @@ export const KaldikDayMatrix: React.FC<KaldikDayMatrixProps> = ({
     <div className="space-y-6">
       {/* 1. Matriks Sesi Waktu: one row per session, one FixedBlockSubGrid per row */}
       <div>
-        <div className="flex items-center justify-between mb-2.5">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-            <Clock className="w-4 h-4 text-amber-600" />
-            <span>Matriks Sesi Waktu ({selectedDayData.dayOfWeek})</span>
-          </h4>
-          <span className="text-[11px] text-slate-400 font-medium">
-            {sortedClasses.length} kelas terdaftar • {selectedDayData.classSlots.length} sesi terisi
-          </span>
-        </div>
-
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-left">
@@ -284,16 +274,6 @@ export const KaldikDayMatrix: React.FC<KaldikDayMatrixProps> = ({
 
       {/* 2. Jadwal Pelajaran Kelas Aktif: per-slot detail list */}
       <div>
-        <div className="flex items-center justify-between mb-2.5">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-            <BookOpen className="w-4 h-4 text-amber-600" />
-            <span>Jadwal Pelajaran Kelas Aktif ({sortedDaySlots.length} Sesi Aktif)</span>
-          </h4>
-          <span className="text-[11px] text-slate-400 font-medium">
-            Rincian daftar pelajaran hari {selectedDayData.dayOfWeek}
-          </span>
-        </div>
-
         {sortedDaySlots.length === 0 ? (
           <div className="p-4 bg-slate-50 border border-dashed border-slate-200 rounded-xl text-center">
             <p className="text-xs text-slate-500 font-medium">

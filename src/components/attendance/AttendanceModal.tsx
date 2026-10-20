@@ -90,6 +90,15 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   const [hal, setHal] = useState<string | number>(targetHal !== undefined ? targetHal : '');
 
   const baselineRef = useRef<string | null>(null);
+  const baselineSnapshotRef = useRef<{
+    teacherStatus: AttendanceStatus | null;
+    teacherTime: string;
+    teacherNote: string;
+    students: AttendanceRollCallStudent[];
+    meetingNotes: string;
+    materi: string;
+    hal: string | number;
+  } | null>(null);
   const lastDraftRef = useRef<{ id: string; json: string } | null>(null);
   const draftAppliedFor = useRef<string | null>(null);
 
@@ -179,7 +188,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   const applyData = (rollCallData: AttendanceRollCallData) => {
     setData(rollCallData);
 
-    const initTeacherStatus = rollCallData.teacher?.status || 'Hadir';
+    const initTeacherStatus: AttendanceStatus | null = rollCallData.teacher?.status ?? null;
     const initTeacherTime = rollCallData.teacher?.timestampStart || rollCallData.meeting.startTime || '';
     const initTeacherNote = rollCallData.teacher?.note || '';
     const initMeetingNotes = rollCallData.meeting.notes || '';
@@ -220,7 +229,17 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
       materi: initMateri,
       hal: initHal,
     });
+    baselineSnapshotRef.current = {
+      teacherStatus: initTeacherStatus,
+      teacherTime: initTeacherTime,
+      teacherNote: initTeacherNote,
+      students: initStudents.map((s) => ({ ...s })),
+      meetingNotes: initMeetingNotes,
+      materi: initMateri,
+      hal: initHal,
+    };
   };
+
 
   // Re-apply draft overrides when ready
   useEffect(() => {
@@ -283,6 +302,22 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     );
   };
 
+  const handleDiscardDraft = () => {
+    const base = baselineSnapshotRef.current;
+    if (base) {
+      setTeacherStatus(base.teacherStatus);
+      setTeacherTime(base.teacherTime);
+      setTeacherNote(base.teacherNote);
+      setMeetingNotes(base.meetingNotes);
+      setStudents(base.students.map((s) => ({ ...s })));
+      setMateri(base.materi);
+      setHal(base.hal);
+    }
+    onDiscardDraft?.(meetingId);
+  };
+
+  const matchedUnit = availableUnits.find((u) => u.title === materi);
+
   const filteredStudents = students.filter((s) => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
@@ -293,33 +328,25 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   const displayClass = classTitle || data?.meeting?.className || 'Kelas';
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden">
-      {/* Backdrop overlay */}
-      <div
-        onClick={onClose}
-        className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity duration-300 animate-in fade-in"
-      />
-
+    <div className="fixed inset-0 z-50 overflow-hidden pointer-events-none">
       {/* Slide-Over Drawer Container */}
-      <div className="fixed inset-y-0 right-0 max-w-full flex pl-6 sm:pl-10">
+      <div className="fixed inset-y-0 right-0 max-w-full flex items-end sm:items-start pl-0 sm:pl-10 pointer-events-none">
         <div
-          className={`w-screen max-w-md sm:max-w-xl h-full shadow-2xl flex flex-col transition-all duration-300 animate-in slide-in-from-right ${
+          className={`pointer-events-auto w-screen max-w-md sm:max-w-xl h-[68dvh] border border-white sm:h-full mt-auto sm:mt-0 rounded-2xl sm:rounded-none shadow-2xl flex flex-col transition-all duration-300 animate-in slide-in-from-right ${
             isCancelled
-              ? 'bg-slate-100 text-slate-600'
-              : hasDraft
-              ? 'bg-white ring-2 ring-amber-400'
+              ? 'bg-slate-400 text-slate-600'
               : 'bg-white'
-          }`}
+            } ${hasDraft
+              ? 'bg-white ring-6 ring-amber-400'
+              : ''}`}
         >
           {/* ------------------------------------------------------------- */}
           {/* Header with Dynamic Theme & Minimal Icon Navigation           */}
           {/* ------------------------------------------------------------- */}
           <div
-            className={`px-4 py-3 flex items-center justify-between transition-colors shrink-0 ${
+            className={`px-4 py-3 pr-6 flex items-center justify-between rounded-t-2xl sm:rounded-none transition-colors shrink-0 ${
               isCancelled
                 ? 'bg-slate-700 text-white'
-                : hasDraft
-                ? 'bg-amber-600 text-white shadow-sm'
                 : 'bg-[#024884] text-white shadow-sm'
             }`}
           >
@@ -330,7 +357,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                 onClick={onPrevSession}
                 disabled={!hasPrevSession}
                 className="p-1 rounded-md text-white/80 hover:text-white hover:bg-white/15 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
-                title="Sesi Sebelumnya (▲)"
+                title="Sesi Sebelumnya"
               >
                 <ChevronUp className="w-4 h-4" />
               </button>
@@ -340,19 +367,34 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                 onClick={onNextSession}
                 disabled={!hasNextSession}
                 className="p-1 rounded-md text-white/80 hover:text-white hover:bg-white/15 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
-                title="Sesi Berikutnya (▼)"
+                title="Sesi Berikutnya"
               >
                 <ChevronDown className="w-4 h-4" />
               </button>
 
               <div className="ml-1 truncate">
-                <span className="text-xs font-bold leading-tight truncate block">
+                <span className={`text-xs font-bold leading-tight truncate block ${isCancelled ? 'text-slate-500' : 'text-white'}`}>
                   {displaySession} • {displayClass}
                 </span>
-                <span className="text-[10px] text-white/75 truncate block">
+                <span className={`text-[10px] truncate block ${isCancelled ? 'text-slate-500' : 'text-white/75'}`}>
                   {data?.meeting?.subjectName || 'Pelajaran'}
                 </span>
               </div>
+              {/* Cancel / Complete Session Button */}
+              {onSetSessionStatus && (
+                <button
+                type="button"
+                onClick={() => onSetSessionStatus(meetingId, isCancelled ? 'scheduled' : 'cancelled')}
+                className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                  isCancelled
+                  ? 'hidden bg-emerald-600 hover:bg-emerald-700 text-white'
+                  : 'hover:bg-white/15 text-white/80 hover:text-white'
+                }`}
+                title={isCancelled ? 'Pulihkan sesi ini' : 'Batalkan sesi ini'}
+                >
+                <Ban className="w-4 h-4" />
+                </button>
+              )}
             </div>
 
             {/* Right: Discard Draft, Cancel/Restore, Close X */}
@@ -361,7 +403,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
               {hasDraft && onDiscardDraft && (
                 <button
                   type="button"
-                  onClick={() => onDiscardDraft(meetingId)}
+                  onClick={handleDiscardDraft}
                   className="p-1.5 rounded-lg bg-amber-700 hover:bg-amber-800 text-white transition-colors cursor-pointer"
                   title="Batalkan perubahan draft"
                 >
@@ -369,21 +411,6 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                 </button>
               )}
 
-              {/* Cancel / Restore Session Button */}
-              {onSetSessionStatus && (
-                <button
-                  type="button"
-                  onClick={() => onSetSessionStatus(meetingId, isCancelled ? 'scheduled' : 'cancelled')}
-                  className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                    isCancelled
-                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                      : 'hover:bg-white/15 text-white/80 hover:text-white'
-                  }`}
-                  title={isCancelled ? 'Pulihkan sesi ini' : 'Batalkan sesi ini'}
-                >
-                  {isCancelled ? <CheckCircle2 className="w-4 h-4" /> : <Ban className="w-4 h-4" />}
-                </button>
-              )}
 
               {/* Close Drawer Button */}
               <button
@@ -401,8 +428,9 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
           {isCancelled && (
             <div className="bg-slate-200/90 text-slate-700 px-4 py-2 text-xs font-semibold flex items-center justify-between border-b border-slate-300">
               <span className="flex items-center gap-1.5">
-                <Ban className="w-3.5 h-3.5 text-slate-500" />
-                <span>Sesi ini berstatus Dibatalkan (kehadiran tetap dapat dicatat)</span>
+                <Ban className="w-3.5 h-3.5 text-rose-700" />
+                <span className="text-rose-700">Sesi dibatalkan </span>
+                <span className="text-2xs"><p>(kehadiran tetap dicatat)</p></span>
               </span>
               <button
                 type="button"
@@ -417,7 +445,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
           {/* ------------------------------------------------------------- */}
           {/* Compact Scrollable Body (Zero clutter, no bottom bar)         */}
           {/* ------------------------------------------------------------- */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-3.5">
+          <div className={`flex-1 overflow-y-auto p-4 space-y-3.5 ${isCancelled ? 'opacity-40' : ''}`}>
             {loading ? (
               <div className="py-20 flex flex-col items-center justify-center text-slate-400 gap-2">
                 <Clock className="w-6 h-6 animate-spin text-amber-500" />
@@ -430,16 +458,26 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
               </div>
             ) : (
               <>
-                {/* 1. Material & Page Range (Compact inline strip) */}
+                {/* 1. Material & Page Range (Compact inline 2-divs strip) */}
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-center gap-2 text-xs">
                   <BookOpen className="w-4 h-4 text-slate-400 shrink-0" />
-                  <input
-                    type="text"
-                    value={materi}
-                    onChange={(e) => setMateri(e.target.value)}
-                    placeholder="Judul materi / bab yang diajarkan..."
-                    className="flex-1 bg-transparent font-medium text-slate-800 placeholder-slate-400 focus:outline-none text-xs"
-                  />
+                  <select
+                    value={matchedUnit ? matchedUnit.id : ''}
+                    onChange={(e) => {
+                      const unit = availableUnits.find((u) => u.id === e.target.value);
+                      setMateri(unit?.title ?? '');
+                    }}
+                    className="flex-1 min-w-0 bg-transparent font-medium text-slate-800 focus:outline-none text-xs"
+                  >
+                    <option value="">Pilih materi...</option>
+                    {availableUnits.map((u) => (
+                      <option key={u.id} value={u.id}>{u.title}</option>
+                    ))}
+                    {!matchedUnit && materi && (
+                      <option value="__stored" disabled>{materi}</option>
+                    )}
+                  </select>
+
                   <div className="flex items-center gap-1 shrink-0 bg-white border border-slate-200 rounded-lg px-2 py-0.5">
                     <span className="text-[10px] text-slate-400 font-bold">Hal.</span>
                     <input
@@ -464,29 +502,23 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                   </div>
 
                   <div className="flex items-center gap-1 shrink-0">
-                    {(['Hadir', 'Izin', 'Sakit', 'Alpa'] as AttendanceStatus[]).map((status) => {
-                      const isActive = teacherStatus === status;
-                      return (
-                        <button
-                          key={status}
-                          type="button"
-                          onClick={() => setTeacherStatus(status)}
-                          className={`px-2 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                            isActive
-                              ? status === 'Hadir'
-                                ? 'bg-emerald-600 text-white'
-                                : status === 'Izin'
-                                ? 'bg-sky-600 text-white'
-                                : status === 'Sakit'
-                                ? 'bg-amber-500 text-white'
-                                : 'bg-rose-600 text-white'
-                              : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-                          }`}
-                        >
-                          {status}
-                        </button>
-                      );
-                    })}
+                  {STATUS_OPTIONS.map((opt) => {
+                    const isSelected = teacherStatus === opt.value;
+                    return (
+                      <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setTeacherStatus(teacherStatus === opt.value ? null : opt.value)}
+                      className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                        isSelected
+                        ? opt.activeClass
+                        : 'bg-white border border-slate-200 text-slate-500 hover:bg-slate-100'
+                      }`}
+                      >
+                      {opt.value[0]}
+                      </button>
+                    );
+                  })}
                   </div>
                 </div>
 
@@ -577,10 +609,10 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                 <div className="text-[10px] text-slate-400 text-center py-2">
                   {hasDraft ? (
                     <span className="text-amber-600 font-semibold">
-                      Perubahan tersimpan otomatis di draft lokal
+                      Ada perubahan. Menunggu tombol Simpan..
                     </span>
                   ) : (
-                    <span>Tersinkronisasi dengan server</span>
+                    <span>Data sesuai dengan server</span>
                   )}
                 </div>
               </>

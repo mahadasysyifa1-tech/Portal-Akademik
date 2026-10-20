@@ -7,9 +7,9 @@ coverage/
 .env*
 !.env.example
 data/
+repomix/
 bun.lock
 *.sql
 repomix-output.xml
 *.txt
-
-
+.hidden

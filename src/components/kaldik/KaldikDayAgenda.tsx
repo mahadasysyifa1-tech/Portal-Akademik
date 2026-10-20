@@ -21,13 +21,6 @@ export const KaldikDayAgenda: React.FC<KaldikDayAgendaProps> = ({
 }) => {
   return (
     <div>
-      <div className="flex items-center justify-between mb-2.5">
-        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-          <CalendarDays className="w-4 h-4 text-amber-600" />
-          <span>Agenda &amp; Event Kaldik ({events.length})</span>
-        </h4>
-      </div>
-
       {events.length === 0 ? (
         <div className="p-3.5 bg-slate-50 border border-dashed border-slate-200 rounded-xl text-center">
           <p className="text-xs text-slate-500 font-medium">

@@ -50,7 +50,7 @@ export const KaldikToolbar: React.FC<KaldikToolbarProps> = ({
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className="flex sm:flex-row sm:items-center justify-between gap-3">
         {/* Month navigation */}
         <div className="flex items-center gap-1.5 self-start sm:self-auto flex-nowrap whitespace-nowrap">
           <div className="inline-flex items-center bg-slate-50 border border-slate-200 rounded-lg p-0.5 shadow-2xs">

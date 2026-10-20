@@ -14,7 +14,7 @@ export const KaldikLegendStrip: React.FC<KaldikLegendStripProps> = ({
   periodsInMonth
 }) => {
   return (
-    <div className="bg-white rounded-xl border border-slate-200/90 px-3.5 py-2 shadow-2xs flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs text-slate-500">
+    <div className="bg-white rounded-xl border border-slate-200/90 px-3.5 py-2 shadow-2xs flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs text-slate-500 hidden sm:block">
       {/* Left: title */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="font-bold text-slate-700 text-[11px] uppercase tracking-wider">
