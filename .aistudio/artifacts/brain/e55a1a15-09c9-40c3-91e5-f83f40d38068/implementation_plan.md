@@ -1,185 +1,223 @@
-# Revised Implementation Plan: Symmetrical Split-Pane Layout for KaldikView
+# Implementation Plan: AttendanceModal DB Reader, H-T-I-A Toggles & Database State Architecture
 
-## 1. Executive Summary & Design Vision
-
-This plan re-architects **KaldikView** (both **Mode Kaldik** and **Mode Jurnal**) into a unified, **symmetrical desktop split-pane (38% Left / 62% Right)** with a sleek visual language, zero header clutters, and ultra-ergonomic mobile interactions.
-
-### Key Refinements from User Feedback
-1. **Jurnal Day Cell Visual Design (Double Visualization, Zero Text Clutter)**:
-   - **Center Zone**: A minimal **column diagram chart** illustrating total people attendance density and trend for that day across all classes/sessions (purely visual height bars without noisy number counters).
-   - **Footer Zone**: The **responsive stacked horizontal progress bar** representing meetings status (Emerald = completed, Amber = scheduled, Slate = cancelled), **replacing the text session count entirely**.
-2. **Kaldik Day Cell Visual Design**:
-   - **Center Zone**: Colored event pills (libur, ujian, kegiatan).
-   - **Footer Zone**: Event count pill (`N Agenda` / `Libur`).
-3. **Mobile 7-Day Strip with Edge-Stepping Arrows**:
-   - Tapping any date in the full calendar collapses the grid into a minimal **7-day week strip**.
-   - Features **tiny `<` and `>` arrow buttons at both ends** to step to the previous or next day. If the user steps past the edge of the week (e.g. from Sunday to Monday or vice versa), the strip automatically shifts to the adjacent week!
-   - Tapping the active selected date deselects it and expands back to the full 5-week month calendar.
-4. **Header-less Right Workspace**:
-   - No redundant date headers or title banners. The right pane dives **straight into the active detail** (`KaldikDayAgenda` in Kaldik mode; `KaldikDayMatrix` in Jurnal mode).
-5. **Slide-Over Attendance Drawer with Up/Down Steppers**:
-   - Opens from the right edge with a smooth backdrop blur.
-   - Header features simple **icon-only navigation with zero text clutter**:
-     - `ChevronUp` (▲ Previous session in the daily timeline)
-     - `ChevronDown` (▼ Next session in the daily timeline)
-     - `X` (Close drawer)
-6. **No Duplicate Mode Switch**:
-   - The toolbar skips the mode switch because `Header.tsx` already controls it globally.
+Enhance `AttendanceModal.tsx` into an explicit, transparent database-reading workstation with unified teacher and student presence toggles (H-T-I-A), amber-dot diff indicators for unsaved changes against database baselines, minimal start/end time tracking with auto-timestamping and flash visual cues, and clear lifecycle semantics for `null`, `blank`, and `no row in DB`.
 
 ---
 
-## 2. Desktop Symmetrical Split-Pane Architecture (`lg+`)
+## User Review & Critical Decisions
 
-Both modes share the identical container layout with a **38% Left / 62% Right** grid ratio:
-
-```
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│ TOP BAR: Bulan/Tahun Navigation | Filter Periode & Event (No duplicate Mode Switch)    │
-├──────────────────────────────────────────┬─────────────────────────────────────────────┤
-│ LEFT PANE (38% Width, Sticky)            │ RIGHT PANE (62% Width, Scrollable Canvas)   │
-│                                          │                                             │
-│ ┌──────────────────────────────────────┐ │ ┌─────────────────────────────────────────┐ │
-│ │ Unified Month Calendar Grid          │ │ │ STRAIGHT TO DETAIL PANE (Zero Header):  │ │
-│ │ • Identical box size in both modes   │ │ │ • If Mode Kaldik:                       │ │
-│ │ • Mode Kaldik: Event chips + count   │ │ │     KaldikDayAgenda (Event cards & CRUD)│ │
-│ │ • Mode Jurnal: Column Chart + Bar    │ │ │ • If Mode Jurnal:                       │ │
-│ ├──────────────────────────────────────┤ │ │     KaldikDayMatrix (Sesi × Kelas,      │ │
-│ │ Legend Strip & Monthly Stats         │ │ │     Silabus & Tombol Presensi)          │ │
-│ └──────────────────────────────────────┘ │ └─────────────────────────────────────────┘ │
-└──────────────────────────────────────────┴─────────────────────────────────────────────┘
-```
-
----
-
-## 3. Calendar Day Cell Rendering Specification
-
-```tsx
-// Unified Day Cell Layout
-<button
-  type="button"
-  onClick={() => handleCellClick(d.dateStr)}
-  className={`day-cell min-h-[78px] p-2 rounded-xl border flex flex-col justify-between transition-all ...`}
->
-  {/* Top Row: Date Number & Quick Indicators */}
-  <div className="flex items-center justify-between">
-    <span className={`text-xs font-bold leading-none ${d.isToday ? 'w-5 h-5 rounded-full bg-amber-500 text-white flex items-center justify-center' : ''}`}>
-      {d.dayNumber}
-    </span>
-    {mode === 'jurnal' && hasDraft && (
-      <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" title="Perubahan draft belum disimpan" />
-    )}
-  </div>
-
-  {/* Center Zone */}
-  {mode === 'kaldik' ? (
-    <div className="space-y-1 my-1">
-      {d.events.slice(0, 2).map((evt) => (
-        <div key={evt.id} className="text-[10px] font-semibold truncate px-1 rounded" style={{ ... }}>
-          {evt.title}
-        </div>
-      ))}
-      {d.events.length > 2 && <span className="text-[9px] text-slate-400">+{d.events.length - 2}</span>}
-    </div>
-  ) : (
-    /* Jurnal Mode: Column diagram chart of total attendance density */
-    <div className="my-1 flex items-end justify-center gap-1 h-6 px-1">
-      {attendanceDensityBars.map((heightPercent, idx) => (
-        <div
-          key={idx}
-          style={{ height: `${heightPercent}%` }}
-          className={`w-1.5 rounded-t-xs transition-all ${
-            isAllCompleted ? 'bg-emerald-400' : isPartiallyCompleted ? 'bg-amber-400' : 'bg-slate-200'
-          }`}
-        />
-      ))}
-    </div>
-  )}
-
-  {/* Footer Zone */}
-  <div className="pt-1 border-t border-slate-100 flex items-center justify-between w-full">
-    {mode === 'kaldik' ? (
-      <span className="text-[10px] text-slate-500 font-medium truncate">
-        {holidayEvent ? 'Libur' : d.events.length > 0 ? `${d.events.length} Agenda` : '—'}
-      </span>
-    ) : (
-      /* Jurnal Mode: Stacked Horizontal Progress Bar replacing text count */
-      totalMeetings > 0 ? (
-        <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden flex gap-0.5" title={`${done}/${totalMeetings} Pertemuan Selesai`}>
-          {done > 0 && <div style={{ width: `${(done / totalMeetings) * 100}%` }} className="bg-emerald-500 h-full" />}
-          {pending > 0 && <div style={{ width: `${(pending / totalMeetings) * 100}%` }} className="bg-amber-400 h-full" />}
-          {cancelled > 0 && <div style={{ width: `${(cancelled / totalMeetings) * 100}%` }} className="bg-slate-300 h-full" />}
-        </div>
-      ) : (
-        <span className="text-[10px] text-slate-300">—</span>
-      )
-    )}
-  </div>
-</button>
-```
+> [!IMPORTANT]
+> **Summary of Confirmed Decisions & User Feedback Integration:**
+> 1. **Unified Teacher & Student Rows (Feedback Addressed)**:
+>    - Teacher and student rows behave identically: both default to `null` (unlogged) if no row exists in DB, both use the exact same H-T-I-A toggle strip, both have auto-stamping and manual time adjustment, and both show amber diffs when modified.
+> 2. **Toggle Colors & Configuration**:
+>    - **H** (Hadir): Green (`bg-emerald-600 text-white`)
+>    - **T** (Terlambat): Green tone (`bg-teal-600 text-white`)
+>    - **I** (Izin): Red tone (`bg-rose-500 text-white`)
+>    - **A** (Alpa): Deep red (`bg-rose-700 text-white`)
+>    - Clicking an active toggle deselects it back to `null` (unlogged).
+> 3. **Database Diff Indicators & Baseline Display (Feedback Addressed)**:
+>    - When a field diverges from the database snapshot, a small amber dot (`•`) appears next to the field, and the original DB value is shown in subtle muted gray (e.g., `DB: H` or `DB: 07:15`).
+>    - When re-aligned with DB, the amber dot disappears immediately.
+> 4. **Previous Records vs. Manual Adjustment (Feedback Addressed)**:
+>    - Saved database records display as neutral gray chips (e.g. `[07:15]`).
+>    - Auto-capture (on toggle click) records the current clock time and provides an 800ms flash glow animation.
+>    - Clicking the time chip opens an inline micro-picker allowing manual time adjustments, showing the current draft time alongside the original DB timestamp.
+> 5. **Jurnal People Count**:
+>    - In `KaldikMonthGrid.tsx`, people counts and column diagrams include both `Hadir` and `Terlambat` as present students.
 
 ---
 
-## 4. Mobile 7-Day Strip with Edge-Stepping Arrows (`< lg`)
+## 1. Database Semantics: "No Row" vs. "NULL" vs. "Blank"
 
-When a date is selected on mobile, the calendar snaps into an ultra-slim horizontal strip:
+A primary source of confusion in attendance tracking is the distinction between database storage, runtime API representation, and modal UI states.
 
+### Architectural Matrix
+
+| State Level | No Row in Database | NULL in Column | Blank String (`""`) |
+|---|---|---|---|
+| **SQL Schema (`attnd_meeting_log`)** | Absence of any record for `(meeting_id, person_type, person_id)`. Indicates roll call was **never taken** for this person. | **Forbidden for `status`** (Column has `NOT NULL CHECK (status IN ('Hadir', ...))`). <br> **Allowed for `timestamp_start` / `note`** when no time or note was provided. | **Forbidden for `status`**. <br> Converted to SQL `NULL` for timestamps and notes to prevent database pollution. |
+| **Server / API Layer** | Represented as `{ status: null, timestampStart: null }` in `MeetingRollCallData`. | Represented as `null` in JSON. | Sanitized to `null` before executing SQL queries. |
+| **Modal UI State (`AttendanceModal`)** | No toggle selected (H, T, I, A all inactive). Status is `null`. Time chip shows `--:--`. | Displayed as empty/unassigned. | Empty input field. |
+
+### Lifecycle of Each User Action & Database Writes
+
+```
+┌─────────────────────────┬───────────────────────────────┬───────────────────────────────────────────┐
+│ User Action in Modal    │ Modal State & Diff Indicator  │ Database Operation on Save                │
+├─────────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
+│ 1. Initial Load         │ Reads DB values into baseline │ No write (read-only baseline).            │
+│    (Person has no log)  │ Status: null, Time: --:--     │                                           │
+├─────────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
+│ 2. Click Toggle (e.g. H)│ Status: 'Hadir'               │ INSERT INTO attnd_meeting_log             │
+│                         │ Time: auto-stamped (HH:mm)    │ (meeting_id, person_type, person_id,     │
+│                         │ Amber dot + "DB: Kosong"      │  status, timestamp_start) VALUES (...)    │
+│                         │                               │ ON CONFLICT DO UPDATE SET status='Hadir'  │
+├─────────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
+│ 3. Click Active Toggle  │ Status: null (deselected)     │ DELETE FROM attnd_meeting_log             │
+│    (Deselect / Clear)   │ Time: cleared or retained     │ WHERE meeting_id = ?                      │
+│                         │ Amber dot + "DB: H"           │   AND person_type = ? AND person_id = ?   │
+├─────────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
+│ 4. Change Status (H->T) │ Status: 'Terlambat'           │ UPDATE attnd_meeting_log                  │
+│                         │ Amber dot + "DB: H"           │ SET status = 'Terlambat', ...             │
+├─────────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
+│ 5. Manual Time Edit     │ Time: edited (e.g. 07:30)     │ UPDATE attnd_meeting_log                  │
+│                         │ Amber dot + "DB: 07:15"       │ SET timestamp_start = '07:30'             │
+├─────────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
+│ 6. Discard Draft        │ Reverts all fields to DB copy.│ No write. Client state restored.          │
+│                         │ All amber dots disappear.     │                                           │
+└─────────────────────────┴───────────────────────────────┴───────────────────────────────────────────┘
+```
+
+> [!NOTE]
+> Previously, `saveMeetingRollCall` only performed `filter(s => !!s.status)`, which ignored deselected students and left orphan rows in the database. In this revision, when a person who previously existed in `baselineSnapshotRef` is set to `status === null`, the server explicitly executes a `DELETE` query to maintain 1:1 parity between the UI and database.
+
+---
+
+## 2. User Experience & Visual Design
+
+### A. Explaining the Diff Indicator Example (Answering Comment 1)
+
+How does the amber dot and gray DB label look in practice without cluttering the compact drawer?
+
+#### Example 1: Student Status Modified
+- **Database Stored**: Student Ahmad Fauzi has `status = 'Hadir'` stored in DB.
+- **User Action**: Teacher clicks **T** (Terlambat).
+- **UI Presentation**:
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│ [◀]  Sen 14  •  Sel 15  •  [Rab 16]  •  Kam 17  •  Jum 18  •  Sab 19  [▶]│
+│ 1  Ahmad Fauzi Al-Ghifari                          [07:15] [H][T*][I][A]│
+│    🟡 DB: Hadir                                                        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
+*(The yellow dot `🟡` with `text-[10px] text-slate-400 font-mono` appears compactly beneath the student name. If the user clicks **H** again to match DB, the label and dot vanish completely).*
 
-### Navigation Behavior:
-- **`[◀]` (Previous Day)**: Moves selected date by `-1`. If current date is Monday, automatically slides the week window to the previous week's Sunday.
-- **`[▶]` (Next Day)**: Moves selected date by `+1`. If current date is Sunday, automatically slides the week window to the next week's Monday.
-- **Tap Active Date Again**: Deselects the date and expands back to the full 5-week month calendar.
-- Minimal height (~50px), leaving **85%+ of smartphone screen** dedicated directly to the detail pane.
+#### Example 2: Materi & Page Progress Modified
+- **Database Stored**: `Bab 1` / `Hal. 12`
+- **User Action**: Teacher changes dropdown to `Bab 2` and page to `24`.
+- **UI Presentation**:
+```
+Judul materi 🟡 (DB: Bab 1)                   Hal. 🟡 (DB: 12)
+┌────────────────────────────────┐            ┌─────────┐
+│ Bab 2 - Thaharah & Wudhu     ▼ │            │ 24      │
+└────────────────────────────────┘            └─────────┘
+```
+
+### B. Previous Records vs. Manual Adjustment (Answering Comment 2)
+
+How are saved records, auto-stamped values, and manual edits distinguished?
+
+1. **Previous Record (DB Baseline)**:
+   - Displayed as a clean, quiet neutral pill: `[ 07:15 ]` (`bg-slate-100 text-slate-600 border border-slate-200`).
+   - Indicates: *"This record was previously saved and verified in the database."*
+
+2. **Auto-Capture & Visual Flash**:
+   - When any toggle button (H, T, I, A) is clicked:
+     - If no time is set, the system captures `new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })` (e.g. `07:22`).
+     - The time pill momentarily triggers an **800ms flash animation**:
+       `animate-pulse bg-emerald-100 text-emerald-800 ring-2 ring-emerald-400 font-bold`.
+     - An amber dot appears beside the pill if it differs from the database baseline.
+
+3. **Manual Adjustment & Review**:
+   - Clicking directly on the time chip `[ 07:22 ]` expands a micro-popover or inline time input directly inside the row:
+```
+┌────────────────────────────────────────────────────────────┐
+│ Edit Waktu Kehadiran:                                     │
+│ Mulai: [ 07:22 ]   Selesai: [ 08:00 ]                     │
+│ ℹ️ Database sebelumnya: 07:15                             │
+│ [ Kembalikan ke DB ]  [ Selesai ]                         │
+└────────────────────────────────────────────────────────────┘
+```
+   - This allows users to inspect the exact past DB record, restore it with a single click, or type a custom time without leaving the drawer.
+
+### C. Unified Teacher and Student Row Behavior (Answering Comment 3)
+
+Both Teacher and Student rows share identical logic and visual layout:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ [Icon] Pengampu: Ustadz Abdullah           [07:00 - --:--]  [H][T][I][A]│
+│        🟡 DB: Belum diisi                                               │
+├─────────────────────────────────────────────────────────────────────────┤
+│ 1  Ahmad Fauzi Al-Ghifari                  [07:15 - --:--]  [H][T][I][A]│
+│    🟡 DB: Hadir                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+- **Initial State**: If not logged in DB, both show `status: null` (no button highlighted) and time `--:--`.
+- **Toggle Controls**: Both use the same 4-button group:
+  - **H**: `bg-emerald-600 text-white` (Green)
+  - **T**: `bg-teal-600 text-white` (Green variant)
+  - **I**: `bg-rose-500 text-white` (Red variant)
+  - **A**: `bg-rose-700 text-white` (Deep Red)
+- **Toggling Off**: Clicking the currently active status button deselects it back to `null` for both teacher and students.
+- **Diff Tracking**: Both track `baselineSnapshotRef` and display the amber dot if modified.
 
 ---
 
-## 5. Slide-Over Attendance Drawer (`AttendanceDrawer.tsx`)
+## 3. KaldikView Integration: People Count with Terlambat
 
-Replaces the full-screen modal with a slide-over panel on the right:
-- **Dimensions**: `fixed inset-y-0 right-0 z-50 w-full sm:w-[500px] md:w-[560px] bg-white shadow-2xl flex flex-col`.
-- **Icon-Only Header**:
-  ```tsx
-  <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-slate-50/80">
-    <div className="flex items-center gap-2">
-      {/* Up/Down session steppers with no text clutters */}
-      <button onClick={handlePrevSession} disabled={!hasPrevSession} className="p-1.5 rounded-lg border hover:bg-white text-slate-600 disabled:opacity-30">
-        <ChevronUp className="w-4 h-4" />
-      </button>
-      <button onClick={handleNextSession} disabled={!hasNextSession} className="p-1.5 rounded-lg border hover:bg-white text-slate-600 disabled:opacity-30">
-        <ChevronDown className="w-4 h-4" />
-      </button>
-      <span className="text-xs font-bold text-slate-700 ml-1">
-        {sessionName} • {className}
-      </span>
-    </div>
-    <button onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700">
-      <X className="w-4 h-4" />
-    </button>
-  </div>
-  ```
-- **Content**:
-  - Target syllabus material, book title, and page range.
-  - Teacher attendance toggle (`Hadir`, `Izin`, `Sakit`, `Alpa`).
-  - Student roll call roster cards with 1-click status pills.
-  - Sticky bottom action bar with `[Simpan ke Draft]` and `[Batal]`.
+In `src/components/kaldik/KaldikMonthGrid.tsx`:
+- When computing journal density and attendance counts in `getJurnalCellStats()`:
+  - Previously: only counted `Hadir` students: `s.status === 'Hadir'`.
+  - Updated: counts both `Hadir` and `Terlambat` students:
+    ```ts
+    const isPresent = s.status === 'Hadir' || s.status === 'Terlambat';
+    ```
+  - Reflects accurate classroom reality: late students are physically present and accounted for in the session bar diagram.
 
 ---
 
-## 6. Implementation Steps & File Changes
+## 4. Technical Architecture & File Changes
 
-| Step | Component | Planned Changes |
-| :--- | :--- | :--- |
-| **1** | `KaldikToolbar.tsx` | Remove the duplicate `KaldikModeSwitch` control. |
-| **2** | `KaldikMonthGrid.tsx` | Integrate: (a) Jurnal center column diagram chart, (b) Jurnal footer stacked horizontal progress bar, (c) Kaldik event count footer, (d) Mobile 7-day strip with edge-stepping `<` and `>` arrow buttons. |
-| **3** | `KaldikView.tsx` | Apply symmetrical `38% / 62%` desktop split grid. Remove all day header banners to go straight to `KaldikDayAgenda` / `KaldikDayMatrix`. |
-| **4** | `AttendanceDrawer.tsx` | Create/adapt slide-over drawer with `ChevronUp` / `ChevronDown` icon-only session navigation. |
+```
+┌───────────────────────────────────────────────────────────────┐
+│                      KaldikMonthGrid.tsx                      │
+│  • getJurnalCellStats(): Hadir + Terlambat in density & count │
+└───────────────────────────────┬───────────────────────────────┘
+                                │ opens
+                                ▼
+┌───────────────────────────────────────────────────────────────┐
+│                      AttendanceModal.tsx                      │
+│  • STATUS_OPTIONS: [H (emerald), T (teal), I (rose), A (red)] │
+│  • Unified teacher/student row renderers with time chip       │
+│  • Flash animation trigger on auto-timestamping               │
+│  • Diff helper: compare current state vs baselineSnapshotRef  │
+│  • Amber dot + DB baseline subtitle on diff                   │
+└───────────────────────────────┬───────────────────────────────┘
+                                │ calls save
+                                ▼
+┌───────────────────────────────────────────────────────────────┐
+│                   server/db/attendance.ts                     │
+│  • saveMeetingRollCall():                                     │
+│    - Upsert active status logs (H, T, I, A)                   │
+│    - Explicit DELETE for deselected logs (status === null)    │
+│    - Convert blank strings ("") to NULL in SQL queries        │
+└───────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## 7. Ready for Implementation
+## 5. Verification Plan
 
-Everything is aligned with your exact instructions. Click **Proceed** to start executing!
+### Automated Build & Types
+1. Run `lint_applet` (`tsc --noEmit`) to verify zero syntax or type regressions.
+2. Run `compile_applet` (`npm run build`) to confirm clean client and server compilation.
+
+### User Interaction Testing
+1. **Teacher vs. Student Equivalence**:
+   - Open a scheduled session where neither teacher nor students have been logged.
+   - Verify both teacher and students start with no button selected (`null`) and time `--:--`.
+2. **Toggle H-T-I-A**:
+   - Click **H** on a row: verifies emerald active state, auto-stamps clock time, triggers green flash.
+   - Click **H** again: verifies deselection to `null`, displays amber dot with `DB: (Kosong)`.
+   - Click **T**: verifies teal active state.
+   - Click **I** or **A**: verifies rose/red active state.
+3. **Database Diff Indicators**:
+   - Verify amber dot appears only when state diverges from DB snapshot.
+   - Verify reverting the value back to original removes the amber dot.
+4. **Time Review & Editing**:
+   - Click the time chip `[07:15]` to open the micro-editor. Adjust time, verify amber dot reflects `DB: 07:15`.
+5. **Kaldik Journal Count**:
+   - Mark 2 students as Hadir and 1 student as Terlambat.
+   - Confirm the Kaldik journal view shows 3 students in the people count and updates the density bar diagram.

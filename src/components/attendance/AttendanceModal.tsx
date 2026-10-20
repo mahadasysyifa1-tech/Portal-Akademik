@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
-  CheckCircle2,
   AlertCircle,
   Clock,
   RotateCcw,
@@ -16,7 +15,6 @@ import type {
   AttendanceStatus,
   AttendanceRollCallData,
   AttendanceRollCallStudent,
-  AttendanceRollCallTeacher
 } from '../../types';
 import type { PendingRollCallLog } from '../../utils/useAttendancePendingStore';
 import { getCachedRollCall } from '../../utils/rollCallCache';
@@ -25,12 +23,20 @@ export interface AttendanceModalProps {
   meetingId: string;
   isOpen: boolean;
   hasDraft: boolean;
+  isAdmin?: boolean;
   onClose: () => void;
   onSaved?: () => void;
   targetMateri?: string;
-  targetHal?: number;
+  targetHal?: number | string;
   targetUnitId?: string;
-  availableUnits?: Array<{ id: string; title: string; pageStart?: number | string; pageEnd?: number | string }>;
+  availableUnits?: Array<{
+    id: string;
+    title: string;
+    pageStart?: number | string;
+    pageEnd?: number | string;
+    page_start?: number | string;
+    page_end?: number | string;
+  }>;
   initialDraft?: PendingRollCallLog;
   onSaveDraft?: (draftPayload: any) => void;
   onDiscardDraft?: (meetingId: string) => void;
@@ -42,36 +48,38 @@ export interface AttendanceModalProps {
   hasNextSession?: boolean;
   sessionTitle?: string;
   classTitle?: string;
+  formattedDate?: string;
 }
 
 const STATUS_OPTIONS: Array<{ value: AttendanceStatus; label: string; activeClass: string }> = [
   { value: 'Hadir', label: 'Hadir', activeClass: 'bg-emerald-600 text-white font-bold' },
-  { value: 'Izin', label: 'Izin', activeClass: 'bg-sky-600 text-white font-bold' },
-  { value: 'Sakit', label: 'Sakit', activeClass: 'bg-amber-500 text-white font-bold' },
-  { value: 'Terlambat', label: 'Terlambat', activeClass: 'bg-orange-500 text-white font-bold' },
-  { value: 'Alpa', label: 'Alpa', activeClass: 'bg-rose-600 text-white font-bold' },
+  { value: 'Terlambat', label: 'Terlambat', activeClass: 'bg-teal-600 text-white font-bold' },
+  { value: 'Izin', label: 'Izin', activeClass: 'bg-rose-500 text-white font-bold' },
+  { value: 'Alpa', label: 'Alpa', activeClass: 'bg-rose-700 text-white font-bold' },
 ];
 
 export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   meetingId,
   isOpen,
+  hasDraft,
+  isAdmin = true,
   onClose,
   targetMateri = '',
   targetHal,
-  targetUnitId,
   availableUnits = [],
+  targetUnitId,
   initialDraft,
   onSaveDraft,
   onDiscardDraft,
   getEffectiveStatus,
   onSetSessionStatus,
-  hasDraft,
   onPrevSession,
   onNextSession,
   hasPrevSession = false,
   hasNextSession = false,
   sessionTitle,
-  classTitle
+  classTitle,
+  formattedDate
 }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -80,25 +88,41 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   // Editable local state
   const [teacherStatus, setTeacherStatus] = useState<AttendanceStatus | null>(null);
   const [teacherTime, setTeacherTime] = useState<string>('');
+  const [teacherTimeEnd, setTeacherTimeEnd] = useState<string>('');
   const [teacherNote, setTeacherNote] = useState<string>('');
   const [meetingNotes, setMeetingNotes] = useState<string>('');
   const [students, setStudents] = useState<AttendanceRollCallStudent[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Minimal material progress state (just two fields: materi & hal)
-  const [materi, setMateri] = useState<string>(targetMateri || '');
-  const [hal, setHal] = useState<string | number>(targetHal !== undefined ? targetHal : '');
+  // Minimal material progress state (reflects DB by default, blank if no record)
+  const [materi, setMateri] = useState<string>('');
+  const [hal, setHal] = useState<string | number>('');
+
+  // Micro time popover state
+  const [activeTimePopover, setActiveTimePopover] = useState<{
+    type: 'teacher' | 'student';
+    id: string;
+    name: string;
+    startTime: string;
+    endTime: string;
+  } | null>(null);
+
+  // Visual flash feedback on auto-stamping
+  const [flashingRowId, setFlashingRowId] = useState<string | null>(null);
+  const flashTimerRef = useRef<any>(null);
 
   const baselineRef = useRef<string | null>(null);
   const baselineSnapshotRef = useRef<{
     teacherStatus: AttendanceStatus | null;
     teacherTime: string;
+    teacherTimeEnd: string;
     teacherNote: string;
     students: AttendanceRollCallStudent[];
     meetingNotes: string;
     materi: string;
     hal: string | number;
   } | null>(null);
+
   const lastDraftRef = useRef<{ id: string; json: string } | null>(null);
   const draftAppliedFor = useRef<string | null>(null);
 
@@ -109,13 +133,31 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
 
   // Fixed field order for baseline serialization
   const serializeState = (s: Record<string, any>) =>
-    JSON.stringify([s.teacherStatus, s.teacherTime, s.teacherNote, s.students, s.meetingNotes, s.materi, s.hal]);
+    JSON.stringify([
+      s.teacherStatus,
+      s.teacherTime,
+      s.teacherTimeEnd,
+      s.teacherNote,
+      s.students,
+      s.meetingNotes,
+      s.materi,
+      s.hal
+    ]);
+
+  const triggerFlash = (id: string) => {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    setFlashingRowId(id);
+    flashTimerRef.current = setTimeout(() => {
+      setFlashingRowId(null);
+    }, 800);
+  };
 
   const buildDraftPayload = () => ({
     teacherLog: {
       id: data?.teacher.id || '',
       status: teacherStatus,
       timestampStart: teacherTime,
+      timestampEnd: teacherTimeEnd,
       note: teacherNote,
     },
     studentLogs: students.map((s) => ({
@@ -129,10 +171,19 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     materialProgress: { materi, hal },
   });
 
-  // Live auto-save draft whenever values diverge from baseline
+  // Live auto-save draft whenever values diverge from baseline (only for admin)
   useEffect(() => {
-    if (!isOpen || !meetingId || loading || baselineRef.current === null) return;
-    const current = serializeState({ teacherStatus, teacherTime, teacherNote, students, meetingNotes, materi, hal });
+    if (!isOpen || !meetingId || loading || baselineRef.current === null || !isAdmin) return;
+    const current = serializeState({
+      teacherStatus,
+      teacherTime,
+      teacherTimeEnd,
+      teacherNote,
+      students,
+      meetingNotes,
+      materi,
+      hal
+    });
 
     if (current === baselineRef.current) {
       if (lastDraftRef.current && lastDraftRef.current.id === meetingId) {
@@ -145,7 +196,20 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
         onSaveDraft?.(buildDraftPayload());
       }
     }
-  }, [teacherStatus, teacherTime, teacherNote, students, meetingNotes, materi, hal, isOpen, meetingId, loading]);
+  }, [
+    teacherStatus,
+    teacherTime,
+    teacherTimeEnd,
+    teacherNote,
+    students,
+    meetingNotes,
+    materi,
+    hal,
+    isOpen,
+    meetingId,
+    loading,
+    isAdmin
+  ]);
 
   // Load meeting data
   useEffect(() => {
@@ -189,12 +253,14 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     setData(rollCallData);
 
     const initTeacherStatus: AttendanceStatus | null = rollCallData.teacher?.status ?? null;
-    const initTeacherTime = rollCallData.teacher?.timestampStart || rollCallData.meeting.startTime || '';
+    const initTeacherTime = rollCallData.teacher?.timestampStart || '';
+    const initTeacherTimeEnd = rollCallData.teacher?.timestampEnd || '';
     const initTeacherNote = rollCallData.teacher?.note || '';
     const initMeetingNotes = rollCallData.meeting.notes || '';
 
-    let initMateri = targetMateri || '';
-    let initHal: string | number = targetHal !== undefined ? targetHal : '';
+    // Database reader: starts with DB values, blank if no record in DB
+    let initMateri = '';
+    let initHal: string | number = '';
 
     if (rollCallData.meeting.notes && rollCallData.meeting.notes.startsWith('{')) {
       try {
@@ -209,11 +275,13 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     const initStudents: AttendanceRollCallStudent[] = (rollCallData.students || []).map((s) => ({
       ...s,
       status: s.status || null,
-      timestampStart: s.timestampStart || rollCallData.meeting.startTime || '',
+      timestampStart: s.timestampStart || '',
+      timestampEnd: s.timestampEnd || '',
     }));
 
     setTeacherStatus(initTeacherStatus);
     setTeacherTime(initTeacherTime);
+    setTeacherTimeEnd(initTeacherTimeEnd);
     setTeacherNote(initTeacherNote);
     setMeetingNotes(initMeetingNotes);
     setStudents(initStudents);
@@ -223,15 +291,18 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     baselineRef.current = serializeState({
       teacherStatus: initTeacherStatus,
       teacherTime: initTeacherTime,
+      teacherTimeEnd: initTeacherTimeEnd,
       teacherNote: initTeacherNote,
       students: initStudents,
       meetingNotes: initMeetingNotes,
       materi: initMateri,
       hal: initHal,
     });
+
     baselineSnapshotRef.current = {
       teacherStatus: initTeacherStatus,
       teacherTime: initTeacherTime,
+      teacherTimeEnd: initTeacherTimeEnd,
       teacherNote: initTeacherNote,
       students: initStudents.map((s) => ({ ...s })),
       meetingNotes: initMeetingNotes,
@@ -239,7 +310,6 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
       hal: initHal,
     };
   };
-
 
   // Re-apply draft overrides when ready
   useEffect(() => {
@@ -250,6 +320,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     if (initialDraft.teacherLog) {
       if (initialDraft.teacherLog.status !== undefined) setTeacherStatus(initialDraft.teacherLog.status);
       if (initialDraft.teacherLog.timestampStart !== undefined) setTeacherTime(initialDraft.teacherLog.timestampStart || '');
+      if (initialDraft.teacherLog.timestampEnd !== undefined) setTeacherTimeEnd(initialDraft.teacherLog.timestampEnd || '');
       if (initialDraft.teacherLog.note !== undefined) setTeacherNote(initialDraft.teacherLog.note || '');
     }
     if (initialDraft.studentLogs) {
@@ -278,27 +349,53 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
 
   if (!isOpen) return null;
 
+  const getNowFormattedTime = () => {
+    const d = new Date();
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    return `${hh}:${mm}`;
+  };
+
+  const handleToggleStatus = (target: 'teacher' | string, optValue: AttendanceStatus) => {
+    if (!isAdmin) return;
+    const nowTime = getNowFormattedTime();
+
+    if (target === 'teacher') {
+      const nextStatus = teacherStatus === optValue ? null : optValue;
+      setTeacherStatus(nextStatus);
+      if (nextStatus && !teacherTime) {
+        setTeacherTime(nowTime);
+        triggerFlash('teacher');
+      }
+    } else {
+      setStudents((prev) =>
+        prev.map((s) => {
+          if (s.studentId !== target) return s;
+          const nextStatus = s.status === optValue ? null : optValue;
+          let nextTime = s.timestampStart;
+          if (nextStatus && !nextTime) {
+            nextTime = nowTime;
+            triggerFlash(s.studentId);
+          }
+          return {
+            ...s,
+            status: nextStatus,
+            timestampStart: nextTime,
+          };
+        })
+      );
+    }
+  };
+
   const markAllStudents = (status: AttendanceStatus) => {
+    if (!isAdmin) return;
+    const nowTime = getNowFormattedTime();
     setStudents((prev) =>
       prev.map((s) => ({
         ...s,
         status,
-        timestampStart: s.timestampStart || data?.meeting.startTime || '',
+        timestampStart: s.timestampStart || nowTime,
       }))
-    );
-  };
-
-  const setStudentStatus = (studentId: string, status: AttendanceStatus) => {
-    setStudents((prev) =>
-      prev.map((s) =>
-        s.studentId === studentId
-          ? {
-              ...s,
-              status: s.status === status ? null : status,
-              timestampStart: s.timestampStart || data?.meeting.startTime || '',
-            }
-          : s
-      )
     );
   };
 
@@ -307,6 +404,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     if (base) {
       setTeacherStatus(base.teacherStatus);
       setTeacherTime(base.teacherTime);
+      setTeacherTimeEnd(base.teacherTimeEnd);
       setTeacherNote(base.teacherNote);
       setMeetingNotes(base.meetingNotes);
       setStudents(base.students.map((s) => ({ ...s })));
@@ -316,7 +414,104 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     onDiscardDraft?.(meetingId);
   };
 
-  const matchedUnit = availableUnits.find((u) => u.title === materi);
+  const applyTimeChange = (type: 'teacher' | 'student', id: string, start: string, end: string) => {
+    if (type === 'teacher') {
+      setTeacherTime(start);
+      setTeacherTimeEnd(end);
+    } else {
+      setStudents((prev) =>
+        prev.map((s) => (s.studentId === id ? { ...s, timestampStart: start, timestampEnd: end } : s))
+      );
+    }
+  };
+
+  const matchedUnit = availableUnits.find(
+    (u) => u.title === materi || (targetUnitId && u.id === targetUnitId)
+  );
+
+  const [rangeMin, rangeMax] = React.useMemo(() => {
+    if (!matchedUnit) return [undefined, undefined];
+    const rawStart = matchedUnit.page_start ?? (matchedUnit as any).pageStart;
+    const rawEnd = matchedUnit.page_end ?? (matchedUnit as any).pageEnd;
+    const pStart = rawStart !== undefined && rawStart !== '' ? parseInt(String(rawStart), 10) : undefined;
+    const pEnd = rawEnd !== undefined && rawEnd !== '' ? parseInt(String(rawEnd), 10) : undefined;
+    const validStart = pStart !== undefined && !isNaN(pStart) ? pStart : undefined;
+    const validEnd = pEnd !== undefined && !isNaN(pEnd) ? pEnd : undefined;
+
+    if (validStart !== undefined && validEnd !== undefined) {
+      return [Math.min(validStart, validEnd), Math.max(validStart, validEnd)];
+    }
+    return [validStart, validEnd];
+  }, [matchedUnit]);
+
+  const handlePageChange = (valStr: string) => {
+    if (!isAdmin) return;
+    if (valStr === '') {
+      setHal('');
+      return;
+    }
+    const clean = valStr.replace(/[^0-9]/g, '');
+    if (!clean) {
+      setHal('');
+      return;
+    }
+    const num = parseInt(clean, 10);
+    if (isNaN(num)) return;
+
+    // Only allow values within the selected material range
+    if (rangeMax !== undefined && num > rangeMax) {
+      setHal(rangeMax);
+      return;
+    }
+    setHal(num);
+  };
+
+  const handlePageBlur = () => {
+    if (hal === '' || hal === undefined || hal === null) return;
+    const num = parseInt(String(hal), 10);
+    if (isNaN(num)) {
+      setHal('');
+      return;
+    }
+    if (rangeMin !== undefined && num < rangeMin) {
+      setHal(rangeMin);
+    } else if (rangeMax !== undefined && num > rangeMax) {
+      setHal(rangeMax);
+    }
+  };
+
+  const handlePageUp = () => {
+    if (!isAdmin) return;
+    const currentNum = parseInt(String(hal), 10);
+    if (isNaN(currentNum)) {
+      setHal(rangeMin !== undefined ? rangeMin : 1);
+      return;
+    }
+    if (rangeMax !== undefined && currentNum >= rangeMax) {
+      return;
+    }
+    setHal(currentNum + 1);
+  };
+
+  const handlePageDown = () => {
+    if (!isAdmin) return;
+    const currentNum = parseInt(String(hal), 10);
+    if (isNaN(currentNum)) {
+      setHal(rangeMin !== undefined ? rangeMin : 1);
+      return;
+    }
+    if (rangeMin !== undefined && currentNum <= rangeMin) {
+      return;
+    }
+    setHal(currentNum - 1);
+  };
+
+  const currentHalNum = parseInt(String(hal), 10);
+  const isUpDisabled = !isAdmin || (rangeMax !== undefined && !isNaN(currentHalNum) && currentHalNum >= rangeMax);
+  const isDownDisabled = !isAdmin || (rangeMin !== undefined && !isNaN(currentHalNum) && currentHalNum <= rangeMin);
+
+  const isMateriDraft = materi !== (baselineSnapshotRef.current?.materi || '');
+  const isHalDraft = String(hal) !== String(baselineSnapshotRef.current?.hal || '');
 
   const filteredStudents = students.filter((s) => {
     if (!searchQuery.trim()) return true;
@@ -327,24 +522,80 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   const displaySession = sessionTitle || data?.meeting?.sessionName || 'Sesi';
   const displayClass = classTitle || data?.meeting?.className || 'Kelas';
 
+  // Helper to render H-T-I-A buttons with amber dot on draft toggle & dimmed grey on DB value
+  const renderStatusToggles = (
+    currentStatus: AttendanceStatus | null,
+    dbStatus: AttendanceStatus | null,
+    targetId: 'teacher' | string
+  ) => {
+    return (
+      <div className="flex items-center gap-1 shrink-0">
+        {STATUS_OPTIONS.map((opt) => {
+          const isSelected = currentStatus === opt.value;
+          const isDb = dbStatus === opt.value;
+          const isDraftSelected = isSelected && currentStatus !== dbStatus;
+          const isDbUnselected = !isSelected && isDb;
+
+          let btnClass = 'relative px-2 py-1 rounded-lg text-[10px] font-bold transition-all';
+          if (!isAdmin) {
+            btnClass += ' opacity-80 cursor-default';
+          } else {
+            btnClass += ' cursor-pointer';
+          }
+
+          if (isSelected) {
+            btnClass += ` ${opt.activeClass} shadow-2xs`;
+          } else if (isDbUnselected) {
+            // Recorded database status shown as dimmed/grey with dashed border
+            btnClass += ' bg-slate-100 border border-dashed border-slate-400 text-slate-500 hover:bg-slate-200';
+          } else {
+            btnClass += ' bg-white border border-slate-200 text-slate-500 hover:bg-slate-100';
+          }
+
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              disabled={!isAdmin}
+              onClick={() => handleToggleStatus(targetId, opt.value)}
+              title={
+                isDb
+                  ? `Database: ${opt.value}${isSelected ? ' (Tersimpan)' : ' (Diverifikasi)'}`
+                  : opt.label
+              }
+              className={btnClass}
+            >
+              {opt.value[0]}
+              {/* Amber dot: on active draft toggle, or on DB button if currently deselected to null */}
+              {(isDraftSelected || (isDbUnselected && currentStatus === null)) && (
+                <span
+                  className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-500 ring-1 ring-white"
+                  title="Perubahan draft belum tersimpan di DB"
+                />
+              )}
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
+
   return (
     <div className="fixed inset-0 z-50 overflow-hidden pointer-events-none">
       {/* Slide-Over Drawer Container */}
       <div className="fixed inset-y-0 right-0 max-w-full flex items-end sm:items-start pl-0 sm:pl-10 pointer-events-none">
         <div
-          className={`pointer-events-auto w-screen max-w-md sm:max-w-xl h-[68dvh] border border-white sm:h-full mt-auto sm:mt-0 rounded-2xl sm:rounded-none shadow-2xl flex flex-col transition-all duration-300 animate-in slide-in-from-right ${
+          className={`pointer-events-auto w-screen max-w-md sm:max-w-xl h-[70dvh] border border-white sm:h-full mt-auto sm:mt-0 rounded-2xl sm:rounded-none shadow-2xl flex flex-col transition-all duration-300 animate-in slide-in-from-right ${
             isCancelled
               ? 'bg-slate-400 text-slate-600'
               : 'bg-white'
-            } ${hasDraft
-              ? 'bg-white ring-6 ring-amber-400'
-              : ''}`}
+          } ${hasDraft ? 'ring-4 ring-amber-400' : ''}`}
         >
           {/* ------------------------------------------------------------- */}
           {/* Header with Dynamic Theme & Minimal Icon Navigation           */}
           {/* ------------------------------------------------------------- */}
           <div
-            className={`px-4 py-3 pr-6 flex items-center justify-between rounded-t-2xl sm:rounded-none transition-colors shrink-0 ${
+            className={`px-4 py-3 pr-5 flex items-center justify-between rounded-t-2xl sm:rounded-none transition-colors shrink-0 ${
               isCancelled
                 ? 'bg-slate-700 text-white'
                 : 'bg-[#024884] text-white shadow-sm'
@@ -373,34 +624,34 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
               </button>
 
               <div className="ml-1 truncate">
-                <span className={`text-xs font-bold leading-tight truncate block ${isCancelled ? 'text-slate-500' : 'text-white'}`}>
+                <span className={`text-xs font-bold leading-tight truncate block ${isCancelled ? 'text-slate-300' : 'text-white'}`}>
                   {displaySession} • {displayClass}
                 </span>
-                <span className={`text-[10px] truncate block ${isCancelled ? 'text-slate-500' : 'text-white/75'}`}>
-                  {data?.meeting?.subjectName || 'Pelajaran'}
+                <span className={`text-[10px] truncate block ${isCancelled ? 'text-slate-300' : 'text-white/75'}`}>
+                  {data?.meeting?.subjectName || 'Pelajaran'}{formattedDate ? ` • ${formattedDate}` : ''}
                 </span>
               </div>
-              {/* Cancel / Complete Session Button */}
-              {onSetSessionStatus && (
+
+              {/* Cancel / Complete Session Button (Admin only) */}
+              {isAdmin && onSetSessionStatus && (
                 <button
-                type="button"
-                onClick={() => onSetSessionStatus(meetingId, isCancelled ? 'scheduled' : 'cancelled')}
-                className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                  isCancelled
-                  ? 'hidden bg-emerald-600 hover:bg-emerald-700 text-white'
-                  : 'hover:bg-white/15 text-white/80 hover:text-white'
-                }`}
-                title={isCancelled ? 'Pulihkan sesi ini' : 'Batalkan sesi ini'}
+                  type="button"
+                  onClick={() => onSetSessionStatus(meetingId, isCancelled ? 'scheduled' : 'cancelled')}
+                  className={`p-1.5 rounded-lg transition-colors cursor-pointer ml-1 ${
+                    isCancelled
+                      ? 'hidden bg-emerald-600 hover:bg-emerald-700 text-white'
+                      : 'hover:bg-white/15 text-white/80 hover:text-white'
+                  }`}
+                  title={isCancelled ? 'Pulihkan sesi ini' : 'Batalkan sesi ini'}
                 >
-                <Ban className="w-4 h-4" />
+                  <Ban className="w-4 h-4" />
                 </button>
               )}
             </div>
 
-            {/* Right: Discard Draft, Cancel/Restore, Close X */}
+            {/* Right: Discard Draft & Close X */}
             <div className="flex items-center gap-1 shrink-0">
-              {/* Discard Draft Button */}
-              {hasDraft && onDiscardDraft && (
+              {isAdmin && hasDraft && onDiscardDraft && (
                 <button
                   type="button"
                   onClick={handleDiscardDraft}
@@ -411,8 +662,6 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                 </button>
               )}
 
-
-              {/* Close Drawer Button */}
               <button
                 type="button"
                 onClick={onClose}
@@ -430,22 +679,28 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
               <span className="flex items-center gap-1.5">
                 <Ban className="w-3.5 h-3.5 text-rose-700" />
                 <span className="text-rose-700">Sesi dibatalkan </span>
-                <span className="text-2xs"><p>(kehadiran tetap dicatat)</p></span>
+                <span className="text-2xs">(kehadiran tetap dicatat)</span>
               </span>
-              <button
-                type="button"
-                onClick={() => onSetSessionStatus?.(meetingId, 'scheduled')}
-                className="text-emerald-700 font-bold hover:underline cursor-pointer"
-              >
-                Pulihkan Sesi
-              </button>
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => onSetSessionStatus?.(meetingId, 'scheduled')}
+                  className="text-emerald-700 font-bold hover:underline cursor-pointer"
+                >
+                  Pulihkan Sesi
+                </button>
+              )}
             </div>
           )}
 
           {/* ------------------------------------------------------------- */}
-          {/* Compact Scrollable Body (Zero clutter, no bottom bar)         */}
+          {/* Scrollable Body with Stable Scrollbar Gutter                   */}
           {/* ------------------------------------------------------------- */}
-          <div className={`flex-1 overflow-y-auto p-4 space-y-3.5 ${isCancelled ? 'opacity-40' : ''}`}>
+          <div
+            className={`flex-1 overflow-y-auto p-4 pr-5 sm:pr-6 space-y-3 [scrollbar-gutter:stable] ${
+              isCancelled ? 'opacity-50' : ''
+            }`}
+          >
             {loading ? (
               <div className="py-20 flex flex-col items-center justify-center text-slate-400 gap-2">
                 <Clock className="w-6 h-6 animate-spin text-amber-500" />
@@ -458,69 +713,202 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
               </div>
             ) : (
               <>
-                {/* 1. Material & Page Range (Compact inline 2-divs strip) */}
+                {/* 1. Material & Page Range Strip (Ultra-minimal with Default & Clear buttons) */}
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-center gap-2 text-xs">
-                  <BookOpen className="w-4 h-4 text-slate-400 shrink-0" />
+                  <div className="relative flex items-center shrink-0">
+                    <BookOpen className="w-4 h-4 text-slate-400" />
+                    {isMateriDraft && (
+                      <span
+                        className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-500 ring-1 ring-white"
+                        title="Materi berubah dari database"
+                      />
+                    )}
+                  </div>
+
                   <select
                     value={matchedUnit ? matchedUnit.id : ''}
+                    disabled={!isAdmin}
                     onChange={(e) => {
                       const unit = availableUnits.find((u) => u.id === e.target.value);
-                      setMateri(unit?.title ?? '');
+                      if (unit) {
+                        setMateri(unit.title);
+                        const startP = unit.page_start ?? (unit as any).pageStart;
+                        if (startP !== undefined && startP !== null && startP !== '') {
+                          setHal(startP);
+                        }
+                      } else {
+                        setMateri('');
+                        setHal('');
+                      }
                     }}
-                    className="flex-1 min-w-0 bg-transparent font-medium text-slate-800 focus:outline-none text-xs"
+                    className="flex-1 min-w-0 bg-transparent font-medium text-slate-800 focus:outline-none text-xs cursor-pointer truncate"
                   >
-                    <option value="">Pilih materi...</option>
+                    <option value="">{materi ? materi : 'Pilih materi...'}</option>
                     {availableUnits.map((u) => (
-                      <option key={u.id} value={u.id}>{u.title}</option>
+                      <option key={u.id} value={u.id}>
+                        {u.title}
+                      </option>
                     ))}
-                    {!matchedUnit && materi && (
-                      <option value="__stored" disabled>{materi}</option>
-                    )}
                   </select>
 
-                  <div className="flex items-center gap-1 shrink-0 bg-white border border-slate-200 rounded-lg px-2 py-0.5">
-                    <span className="text-[10px] text-slate-400 font-bold">Hal.</span>
+                  <div
+                    className="relative flex items-center gap-0.5 shrink-0 bg-white border border-slate-200 rounded-lg pl-1.5 pr-0.5 py-0.5"
+                    title={
+                      rangeMin !== undefined && rangeMax !== undefined
+                        ? `Rentang halaman materi: ${rangeMin} - ${rangeMax}`
+                        : 'Nomor halaman'
+                    }
+                  >
+                    <span className="text-[10px] text-slate-400 font-bold select-none">Hal.</span>
                     <input
                       type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                       value={hal}
-                      onChange={(e) => setHal(e.target.value)}
-                      placeholder="—"
-                      className="w-12 bg-transparent text-right font-bold text-slate-800 focus:outline-none text-xs"
+                      disabled={!isAdmin}
+                      onChange={(e) => handlePageChange(e.target.value)}
+                      onBlur={handlePageBlur}
+                      placeholder={rangeMin !== undefined ? String(rangeMin) : '—'}
+                      className="w-8 bg-transparent text-center font-bold text-slate-800 focus:outline-none text-xs"
                     />
-                  </div>
-                </div>
-
-                {/* 2. Teacher Attendance (Compact single row) */}
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                      Ustadz / Pengajar
-                    </div>
-                    <div className="text-xs font-bold text-slate-800 truncate">
-                      {data?.teacher.name || 'Pengampu'}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-1 shrink-0">
-                  {STATUS_OPTIONS.map((opt) => {
-                    const isSelected = teacherStatus === opt.value;
-                    return (
+                    {/* Up / Down steppers */}
+                    <div className="flex flex-col -my-0.5 border-l border-slate-200 pl-0.5">
                       <button
-                      key={opt.value}
-                      type="button"
-                      onClick={() => setTeacherStatus(teacherStatus === opt.value ? null : opt.value)}
-                      className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
-                        isSelected
-                        ? opt.activeClass
-                        : 'bg-white border border-slate-200 text-slate-500 hover:bg-slate-100'
-                      }`}
+                        type="button"
+                        disabled={isUpDisabled}
+                        onClick={handlePageUp}
+                        className="p-0.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded disabled:opacity-20 disabled:pointer-events-none cursor-pointer leading-none"
+                        title={rangeMax !== undefined ? `Tambah halaman (Maks: ${rangeMax})` : 'Tambah halaman'}
                       >
-                      {opt.value[0]}
+                        <ChevronUp className="w-2.5 h-2.5 stroke-[2.5]" />
                       </button>
-                    );
-                  })}
+                      <button
+                        type="button"
+                        disabled={isDownDisabled}
+                        onClick={handlePageDown}
+                        className="p-0.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded disabled:opacity-20 disabled:pointer-events-none cursor-pointer leading-none"
+                        title={rangeMin !== undefined ? `Kurang halaman (Min: ${rangeMin})` : 'Kurang halaman'}
+                      >
+                        <ChevronDown className="w-2.5 h-2.5 stroke-[2.5]" />
+                      </button>
+                    </div>
+                    {isHalDraft && (
+                      <span
+                        className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-500 ring-1 ring-white"
+                        title="Halaman berubah dari database"
+                      />
+                    )}
                   </div>
+
+                  {isAdmin && (
+                    <div className="flex items-center gap-1 shrink-0 border-l border-slate-200 pl-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const defMateri = targetMateri || availableUnits[0]?.title || '';
+                          const unit = availableUnits.find((u) => u.title === defMateri) || availableUnits[0];
+                          const fallbackPage = unit
+                            ? (unit.page_start ?? (unit as any).pageStart ?? unit.page_end ?? (unit as any).pageEnd ?? '')
+                            : '';
+                          const defHal =
+                            targetHal !== undefined && targetHal !== null && targetHal !== ''
+                              ? targetHal
+                              : fallbackPage;
+                          setMateri(defMateri);
+                          setHal(defHal);
+                        }}
+                        className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 transition-colors cursor-pointer"
+                        title="Isi materi & halaman sesuai kurikulum standar"
+                      >
+                        Default
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMateri('');
+                          setHal('');
+                        }}
+                        className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-white border border-slate-200 hover:bg-rose-50 hover:text-rose-600 text-slate-500 transition-colors cursor-pointer"
+                        title="Kosongkan materi dan halaman"
+                      >
+                        Kosongkan
+                      </button>
+                    </div>
+                  )}
                 </div>
+
+                {/* 2. Teacher Attendance (Identical layout to students: Name, Time Chip, H-T-I-A) */}
+                {(() => {
+                  const dbTeacherStatus = baselineSnapshotRef.current?.teacherStatus ?? null;
+                  const dbTeacherTime = baselineSnapshotRef.current?.teacherTime ?? '';
+                  const dbTeacherTimeEnd = baselineSnapshotRef.current?.teacherTimeEnd ?? '';
+                  const isTeacherTimeDraft = teacherTime !== dbTeacherTime || teacherTimeEnd !== dbTeacherTimeEnd;
+                  const teacherTimeDisplay = teacherTime
+                    ? teacherTimeEnd
+                      ? `${teacherTime}-${teacherTimeEnd}`
+                      : teacherTime
+                    : '--:--';
+                  const isTeacherFlashing = flashingRowId === 'teacher';
+
+                  return (
+                    <div
+                      className={`p-2 rounded-xl border flex items-center justify-between gap-2 transition-colors ${
+                        teacherStatus === 'Hadir'
+                          ? 'bg-emerald-50/40 border-emerald-200'
+                          : teacherStatus === 'Terlambat'
+                          ? 'bg-teal-50/40 border-teal-200'
+                          : teacherStatus
+                          ? 'bg-slate-50 border-slate-200'
+                          : 'bg-white border-slate-200/80 hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="min-w-0">
+                          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                            Ustadz / Pengajar
+                          </div>
+                          <div className="text-xs font-bold text-slate-800 truncate">
+                            {data?.teacher.name || 'Pengampu'}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {/* Minimal Time Chip */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!isAdmin) return;
+                            setActiveTimePopover({
+                              type: 'teacher',
+                              id: 'teacher',
+                              name: data?.teacher.name || 'Ustadz',
+                              startTime: teacherTime,
+                              endTime: teacherTimeEnd,
+                            });
+                          }}
+                          className={`relative px-1.5 py-0.5 rounded text-[10px] font-mono border transition-all cursor-pointer shrink-0 ${
+                            isTeacherFlashing
+                              ? 'bg-emerald-100 text-emerald-800 ring-2 ring-emerald-400 font-bold animate-pulse'
+                              : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+                          }`}
+                          title="Klik untuk melihat atau mengatur jam kehadiran"
+                        >
+                          {teacherTimeDisplay}
+                          {isTeacherTimeDraft && (
+                            <span
+                              className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-500 ring-1 ring-white"
+                              title="Jam presensi berubah dari DB"
+                            />
+                          )}
+                        </button>
+
+                        {/* H-T-I-A Toggles */}
+                        {renderStatusToggles(teacherStatus, dbTeacherStatus, 'teacher')}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* 3. Student Roster Search & Quick All-Hadir */}
                 <div className="flex items-center justify-between gap-2 pt-1">
@@ -535,15 +923,17 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                     />
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => markAllStudents('Hadir')}
-                    className="flex items-center gap-1 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 rounded-xl text-xs font-bold transition-colors cursor-pointer shrink-0"
-                    title="Tandai semua santri hadir"
-                  >
-                    <UserCheck className="w-3.5 h-3.5" />
-                    <span>Semua Hadir</span>
-                  </button>
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => markAllStudents('Hadir')}
+                      className="flex items-center gap-1 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 rounded-xl text-xs font-bold transition-colors cursor-pointer shrink-0"
+                      title="Tandai semua santri hadir"
+                    >
+                      <UserCheck className="w-3.5 h-3.5" />
+                      <span>Semua Hadir</span>
+                    </button>
+                  )}
                 </div>
 
                 {/* 4. Student Roster List */}
@@ -553,55 +943,88 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                       Tidak ada santri yang cocok dengan pencarian
                     </div>
                   ) : (
-                    filteredStudents.map((student, idx) => (
-                      <div
-                        key={student.studentId}
-                        className={`p-2 rounded-xl border flex items-center justify-between gap-2 transition-colors ${
-                          student.status === 'Hadir'
-                            ? 'bg-emerald-50/40 border-emerald-200'
-                            : student.status
-                            ? 'bg-slate-50 border-slate-200'
-                            : 'bg-white border-slate-200/80 hover:border-slate-300'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-[10px] font-mono font-bold text-slate-400 w-4 text-right shrink-0">
-                            {idx + 1}
-                          </span>
-                          <div className="min-w-0">
-                            <div className="text-xs font-bold text-slate-800 truncate">
-                              {student.name}
-                            </div>
-                            {student.nisn && (
-                              <div className="text-[10px] font-mono text-slate-400 truncate">
-                                {student.nisn}
+                    filteredStudents.map((student, idx) => {
+                      const baseStudent = baselineSnapshotRef.current?.students.find(
+                        (bs) => bs.studentId === student.studentId
+                      );
+                      const dbStudentStatus = baseStudent?.status ?? null;
+                      const dbStudentTime = baseStudent?.timestampStart ?? '';
+                      const dbStudentTimeEnd = baseStudent?.timestampEnd ?? '';
+                      const isStudentTimeDraft =
+                        (student.timestampStart || '') !== dbStudentTime ||
+                        (student.timestampEnd || '') !== dbStudentTimeEnd;
+                      const studentTimeDisplay = student.timestampStart
+                        ? student.timestampEnd
+                          ? `${student.timestampStart}-${student.timestampEnd}`
+                          : student.timestampStart
+                        : '--:--';
+                      const isStudentFlashing = flashingRowId === student.studentId;
+
+                      return (
+                        <div
+                          key={student.studentId}
+                          className={`p-2 rounded-xl border flex items-center justify-between gap-2 transition-colors ${
+                            student.status === 'Hadir'
+                              ? 'bg-emerald-50/40 border-emerald-200'
+                              : student.status === 'Terlambat'
+                              ? 'bg-teal-50/40 border-teal-200'
+                              : student.status
+                              ? 'bg-slate-50 border-slate-200'
+                              : 'bg-white border-slate-200/80 hover:border-slate-300'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-[10px] font-mono font-bold text-slate-400 w-4 text-right shrink-0">
+                              {idx + 1}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="text-xs font-bold text-slate-800 truncate">
+                                {student.name}
                               </div>
-                            )}
+                              {student.nisn && (
+                                <div className="text-[10px] font-mono text-slate-400 truncate">
+                                  {student.nisn}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {/* Minimal Time Chip */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!isAdmin) return;
+                                setActiveTimePopover({
+                                  type: 'student',
+                                  id: student.studentId,
+                                  name: student.name,
+                                  startTime: student.timestampStart || '',
+                                  endTime: student.timestampEnd || '',
+                                });
+                              }}
+                              className={`relative px-1.5 py-0.5 rounded text-[10px] font-mono border transition-all cursor-pointer shrink-0 ${
+                                isStudentFlashing
+                                  ? 'bg-emerald-100 text-emerald-800 ring-2 ring-emerald-400 font-bold animate-pulse'
+                                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+                              }`}
+                              title="Klik untuk melihat atau mengatur jam kehadiran"
+                            >
+                              {studentTimeDisplay}
+                              {isStudentTimeDraft && (
+                                <span
+                                  className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-500 ring-1 ring-white"
+                                  title="Jam presensi berubah dari DB"
+                                />
+                              )}
+                            </button>
+
+                            {/* H-T-I-A Toggles */}
+                            {renderStatusToggles(student.status, dbStudentStatus, student.studentId)}
                           </div>
                         </div>
-
-                        {/* Status buttons */}
-                        <div className="flex items-center gap-1 shrink-0">
-                          {STATUS_OPTIONS.map((opt) => {
-                            const isSelected = student.status === opt.value;
-                            return (
-                              <button
-                                key={opt.value}
-                                type="button"
-                                onClick={() => setStudentStatus(student.studentId, opt.value)}
-                                className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
-                                  isSelected
-                                    ? opt.activeClass
-                                    : 'bg-white border border-slate-200 text-slate-500 hover:bg-slate-100'
-                                }`}
-                              >
-                                {opt.value[0]}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
 
@@ -609,7 +1032,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                 <div className="text-[10px] text-slate-400 text-center py-2">
                   {hasDraft ? (
                     <span className="text-amber-600 font-semibold">
-                      Ada perubahan. Menunggu tombol Simpan..
+                      Ada perubahan draft. Menunggu tombol Simpan..
                     </span>
                   ) : (
                     <span>Data sesuai dengan server</span>
@@ -620,6 +1043,107 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
           </div>
         </div>
       </div>
+
+      {/* ------------------------------------------------------------- */}
+      {/* Minimal Time Popover with backdrop click-outside              */}
+      {/* ------------------------------------------------------------- */}
+      {activeTimePopover && (
+        <div
+          className="fixed inset-0 z-60 bg-black/25 flex items-center justify-center p-4 pointer-events-auto animate-in fade-in"
+          onClick={() => setActiveTimePopover(null)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl border border-slate-200 p-4 w-72 space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+              <div className="text-xs font-bold text-slate-800 truncate">
+                Waktu: {activeTimePopover.name}
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTimePopover(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-md"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5 text-xs">
+              <div>
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                  Mulai
+                </label>
+                <input
+                  type="time"
+                  value={activeTimePopover.startTime}
+                  disabled={!isAdmin}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setActiveTimePopover((p) => (p ? { ...p, startTime: val } : null));
+                    applyTimeChange(activeTimePopover.type, activeTimePopover.id, val, activeTimePopover.endTime);
+                  }}
+                  className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                  Selesai
+                </label>
+                <input
+                  type="time"
+                  value={activeTimePopover.endTime}
+                  disabled={!isAdmin}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setActiveTimePopover((p) => (p ? { ...p, endTime: val } : null));
+                    applyTimeChange(activeTimePopover.type, activeTimePopover.id, activeTimePopover.startTime, val);
+                  }}
+                  className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-amber-400"
+                />
+              </div>
+            </div>
+
+            {isAdmin && (
+              <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[10px]">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const defStart = data?.meeting.startTime || '07:00';
+                      const defEnd = data?.meeting.endTime || '08:30';
+                      setActiveTimePopover((p) => (p ? { ...p, startTime: defStart, endTime: defEnd } : null));
+                      applyTimeChange(activeTimePopover.type, activeTimePopover.id, defStart, defEnd);
+                    }}
+                    className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-md transition-colors cursor-pointer"
+                  >
+                    Default
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTimePopover((p) => (p ? { ...p, startTime: '', endTime: '' } : null));
+                      applyTimeChange(activeTimePopover.type, activeTimePopover.id, '', '');
+                    }}
+                    className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold rounded-md transition-colors cursor-pointer"
+                  >
+                    Kosongkan
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTimePopover(null)}
+                  className="px-2.5 py-1 bg-[#024884] hover:bg-[#013563] text-white font-bold rounded-md transition-colors cursor-pointer"
+                >
+                  Selesai
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

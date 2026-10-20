@@ -439,6 +439,7 @@ export async function getMeetingRollCall(
     name: m.teacher_name || 'Ustadz / Pengajar',
     status: (teacherLog?.status as AttendanceStatus) || null,
     timestampStart: teacherLog?.timestamp_start || null,
+    timestampEnd: teacherLog?.timestamp_end || null,
     note: teacherLog?.note || '',
   };
 
@@ -514,10 +515,10 @@ export async function updateMeetingStatus(
 export async function saveMeetingRollCall(
   client: Client,
   meetingId: string,
-  teacherLog: { id: string; status: AttendanceStatus; timestampStart?: string; note?: string },
+  teacherLog: { id: string; status: AttendanceStatus; timestampStart?: string; timestampEnd?: string; note?: string },
   studentLogs: Array<{ studentId: string; status: AttendanceStatus; timestampStart?: string; timestampEnd?: string; note?: string }>,
   meetingNotes?: string,
-  materialProgress?: { materi?: string; hal?: number; unitId?: string }
+  materialProgress?: { materi?: string; hal?: number | string; unitId?: string }
 ): Promise<void> {
   const statements: Array<{ sql: string; args: any[] }> = [];
 
@@ -538,54 +539,73 @@ export async function saveMeetingRollCall(
   }
 
   // Precalculate helper aggregation counts (logged students only)
+  // Both 'Hadir' and 'Terlambat' count as present attendees
   const loggedStudents = studentLogs.filter((s) => !!s.status);
-  const hadirCount = loggedStudents.filter((s) => s.status === 'Hadir').length;
-  const absentCount = loggedStudents.filter((s) => s.status !== 'Hadir').length;
+  const hadirCount = loggedStudents.filter((s) => s.status === 'Hadir' || s.status === 'Terlambat').length;
+  const absentCount = loggedStudents.filter((s) => s.status !== 'Hadir' && s.status !== 'Terlambat').length;
   const enrolledCount = studentLogs.length;
+  const isLoggedNow = loggedStudents.length > 0 || (teacherLog && !!teacherLog.status) ? 1 : 0;
 
   // Update meeting status and helper summary columns in one atomic write
   statements.push({
     sql: `UPDATE attnd_meeting 
-          SET status = CASE WHEN status = 'cancelled' THEN 'cancelled' ELSE 'completed' END,
+          SET status = CASE WHEN status = 'cancelled' THEN 'cancelled' ELSE (CASE WHEN ? = 1 THEN 'completed' ELSE 'scheduled' END) END,
               notes = ?, 
               present_count = ?, 
               absent_count = ?, 
               enrolled_count = ?, 
-              is_logged = 1, 
+              is_logged = ?, 
               updated_at = CURRENT_TIMESTAMP 
           WHERE id = ?`,
-    args: [finalNotes, hadirCount, absentCount, enrolledCount, meetingId],
+    args: [isLoggedNow, finalNotes, hadirCount, absentCount, enrolledCount, isLoggedNow, meetingId],
   });
 
-  // Upsert Teacher Log
-  if (teacherLog && teacherLog.id && teacherLog.status) {
-    statements.push({
-      sql: `INSERT INTO attnd_meeting_log (
-              meeting_id, person_type, person_id, status, timestamp_start, note, updated_at
-            ) VALUES (?, 'teacher', ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(meeting_id, person_type, person_id) DO UPDATE SET
-              status = excluded.status,
-              timestamp_start = excluded.timestamp_start,
-              note = excluded.note,
-              updated_at = CURRENT_TIMESTAMP`,
-      args: [meetingId, teacherLog.id, teacherLog.status, teacherLog.timestampStart || null, teacherLog.note || null],
-    });
+  // Upsert or Delete Teacher Log
+  if (teacherLog && teacherLog.id) {
+    if (teacherLog.status) {
+      statements.push({
+        sql: `INSERT INTO attnd_meeting_log (
+                meeting_id, person_type, person_id, status, timestamp_start, timestamp_end, note, updated_at
+              ) VALUES (?, 'teacher', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+              ON CONFLICT(meeting_id, person_type, person_id) DO UPDATE SET
+                status = excluded.status,
+                timestamp_start = excluded.timestamp_start,
+                timestamp_end = excluded.timestamp_end,
+                note = excluded.note,
+                updated_at = CURRENT_TIMESTAMP`,
+        args: [meetingId, teacherLog.id, teacherLog.status, teacherLog.timestampStart || null, teacherLog.timestampEnd || null, teacherLog.note || null],
+      });
+    } else {
+      // Teacher deselected: delete row from attnd_meeting_log
+      statements.push({
+        sql: `DELETE FROM attnd_meeting_log WHERE meeting_id = ? AND person_type = 'teacher' AND person_id = ?`,
+        args: [meetingId, teacherLog.id],
+      });
+    }
   }
 
-  // Upsert Student Logs (logged students only)
-  for (const s of loggedStudents) {
-    statements.push({
-      sql: `INSERT INTO attnd_meeting_log (
-              meeting_id, person_type, person_id, status, timestamp_start, timestamp_end, note, updated_at
-            ) VALUES (?, 'student', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(meeting_id, person_type, person_id) DO UPDATE SET
-              status = excluded.status,
-              timestamp_start = excluded.timestamp_start,
-              timestamp_end = excluded.timestamp_end,
-              note = excluded.note,
-              updated_at = CURRENT_TIMESTAMP`,
-      args: [meetingId, s.studentId, s.status, s.timestampStart || null, s.timestampEnd || null, s.note || null],
-    });
+  // Upsert or Delete Student Logs
+  for (const s of studentLogs) {
+    if (s.status) {
+      statements.push({
+        sql: `INSERT INTO attnd_meeting_log (
+                meeting_id, person_type, person_id, status, timestamp_start, timestamp_end, note, updated_at
+              ) VALUES (?, 'student', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+              ON CONFLICT(meeting_id, person_type, person_id) DO UPDATE SET
+                status = excluded.status,
+                timestamp_start = excluded.timestamp_start,
+                timestamp_end = excluded.timestamp_end,
+                note = excluded.note,
+                updated_at = CURRENT_TIMESTAMP`,
+        args: [meetingId, s.studentId, s.status, s.timestampStart || null, s.timestampEnd || null, s.note || null],
+      });
+    } else {
+      // Student status cleared / null: delete row from attnd_meeting_log
+      statements.push({
+        sql: `DELETE FROM attnd_meeting_log WHERE meeting_id = ? AND person_type = 'student' AND person_id = ?`,
+        args: [meetingId, s.studentId],
+      });
+    }
   }
 
   await client.batch(statements, 'write');

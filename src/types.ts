@@ -472,6 +472,7 @@ export interface AttendanceRollCallTeacher {
   name: string;
   status: AttendanceStatus | null;
   timestampStart?: string;
+  timestampEnd?: string;
   note?: string;
 }
 

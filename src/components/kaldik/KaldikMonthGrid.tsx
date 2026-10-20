@@ -64,7 +64,7 @@ function getJurnalCellStats(
       const loggedStudents = draft.studentLogs.filter((s: any) => Boolean(s.status));
       if (loggedStudents.length > 0) {
         isLogged = true;
-        hadir = loggedStudents.filter((s: any) => s.status === 'Hadir').length;
+        hadir = loggedStudents.filter((s: any) => s.status === 'Hadir' || s.status === 'Terlambat').length;
         enrolled = draft.studentLogs.length;
       }
     } else if (
@@ -79,7 +79,7 @@ function getJurnalCellStats(
       status === 'completed'
     ) {
       isLogged = true;
-      hadir = m.summary?.hadirCount ?? m.present_count ?? 0;
+      hadir = (m.summary?.hadirCount ?? m.present_count ?? 0) + (m.summary?.terlambatCount ?? 0);
       enrolled = m.summary?.totalEnrolled ?? m.enrolled_count ?? (hadir > 0 ? hadir : 1);
     }
 

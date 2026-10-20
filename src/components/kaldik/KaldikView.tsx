@@ -90,21 +90,6 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
     }
   };
 
-  // Align selected date when user explicitly changes month/year in Toolbar
-  useEffect(() => {
-    if (!selectedDateStr) return;
-    const parts = selectedDateStr.split('-');
-    if (parts.length === 3) {
-      const y = parseInt(parts[0], 10);
-      const m = parseInt(parts[1], 10) - 1;
-      if (y !== currentYear || m !== currentMonth) {
-        setSelectedDateStr(
-          `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-01`
-        );
-      }
-    }
-  }, [currentYear, currentMonth]);
-
   // Lookup maps for fast access
   const subjectMap = useMemo(() => new Map(db.subjects.map((s) => [s.id, s])), [db.subjects]);
   const teacherMap = useMemo(() => new Map(db.teachers.map((t) => [t.id, t])), [db.teachers]);
@@ -181,7 +166,7 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
   const monthlyStats = useMemo(() => computeMonthlyStats(jurnalDays), [jurnalDays]);
 
   const selectedDayData = useMemo(() => {
-    const found = jurnalDays.find((d) => d.dateStr === selectedDateStr && d.isCurrentMonth);
+    const found = jurnalDays.find((d) => d.dateStr === selectedDateStr);
     if (found) return found;
     return jurnalDays.find((d) => d.isCurrentMonth) || null;
   }, [selectedDateStr, jurnalDays]);
@@ -215,22 +200,103 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
     return `${INDONESIAN_DAYS[dateObj.getDay()]}, ${parseInt(dStr, 10)} ${INDONESIAN_MONTHS[dateObj.getMonth()]} ${dateObj.getFullYear()}`;
   }, [selectedDayData]);
 
+  // Keep active attendance modal in sync when the selected day changes in KaldikMonthGrid
+  useEffect(() => {
+    if (!activeAttendance || !selectedDayData) return;
+    const daySlots = selectedDayData.classSlots || [];
+    if (daySlots.length === 0) return;
+
+    // 1. Exact match for session and class
+    const exactMatch = daySlots.find(
+      (s) => s.classId === activeAttendance.slot.classId && s.sessionId === activeAttendance.slot.sessionId
+    );
+    if (exactMatch) {
+      const nextMeeting = (monthMeetingsMap.get(selectedDayData.dateStr) || []).find(
+        (m) => m.sessionId === exactMatch.sessionId && m.classId === exactMatch.classId
+      );
+      if (
+        activeAttendance.slot !== exactMatch ||
+        activeAttendance.meeting !== nextMeeting
+      ) {
+        setActiveAttendance({ slot: exactMatch, meeting: nextMeeting });
+      }
+      return;
+    }
+
+    // 2. Class match
+    const classMatch = daySlots.find((s) => s.classId === activeAttendance.slot.classId);
+    if (classMatch) {
+      const nextMeeting = (monthMeetingsMap.get(selectedDayData.dateStr) || []).find(
+        (m) => m.sessionId === classMatch.sessionId && m.classId === classMatch.classId
+      );
+      setActiveAttendance({ slot: classMatch, meeting: nextMeeting });
+      return;
+    }
+
+    // 3. Session match
+    const sessionMatch = daySlots.find((s) => s.sessionId === activeAttendance.slot.sessionId);
+    if (sessionMatch) {
+      const nextMeeting = (monthMeetingsMap.get(selectedDayData.dateStr) || []).find(
+        (m) => m.sessionId === sessionMatch.sessionId && m.classId === sessionMatch.classId
+      );
+      setActiveAttendance({ slot: sessionMatch, meeting: nextMeeting });
+      return;
+    }
+
+    // 4. Fallback to first slot of the day
+    const firstSlot = daySlots[0];
+    const nextMeeting = (monthMeetingsMap.get(selectedDayData.dateStr) || []).find(
+      (m) => m.sessionId === firstSlot.sessionId && m.classId === firstSlot.classId
+    );
+    setActiveAttendance({ slot: firstSlot, meeting: nextMeeting });
+  }, [selectedDayData?.dateStr, monthMeetingsMap]);
+
   // Navigation
   const handlePrevMonth = () => {
     if (currentMonth === 0) {
+      const newYear = currentYear - 1;
       setCurrentMonth(11);
-      setCurrentYear((y) => y - 1);
+      setCurrentYear(newYear);
+      if (selectedDateStr) {
+        setSelectedDateStr(`${newYear}-12-01`);
+      }
     } else {
-      setCurrentMonth((m) => m - 1);
+      const newMonth = currentMonth - 1;
+      setCurrentMonth(newMonth);
+      if (selectedDateStr) {
+        setSelectedDateStr(`${currentYear}-${String(newMonth + 1).padStart(2, '0')}-01`);
+      }
     }
   };
 
   const handleNextMonth = () => {
     if (currentMonth === 11) {
+      const newYear = currentYear + 1;
       setCurrentMonth(0);
-      setCurrentYear((y) => y + 1);
+      setCurrentYear(newYear);
+      if (selectedDateStr) {
+        setSelectedDateStr(`${newYear}-01-01`);
+      }
     } else {
-      setCurrentMonth((m) => m + 1);
+      const newMonth = currentMonth + 1;
+      setCurrentMonth(newMonth);
+      if (selectedDateStr) {
+        setSelectedDateStr(`${currentYear}-${String(newMonth + 1).padStart(2, '0')}-01`);
+      }
+    }
+  };
+
+  const handleMonthChange = (m: number) => {
+    setCurrentMonth(m);
+    if (selectedDateStr) {
+      setSelectedDateStr(`${currentYear}-${String(m + 1).padStart(2, '0')}-01`);
+    }
+  };
+
+  const handleYearChange = (y: number) => {
+    setCurrentYear(y);
+    if (selectedDateStr) {
+      setSelectedDateStr(`${y}-${String(currentMonth + 1).padStart(2, '0')}-01`);
     }
   };
 
@@ -289,8 +355,8 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
         onPrevMonth={handlePrevMonth}
         onNextMonth={handleNextMonth}
         onToday={handleToday}
-        onMonthChange={setCurrentMonth}
-        onYearChange={setCurrentYear}
+        onMonthChange={handleMonthChange}
+        onYearChange={handleYearChange}
         showFilters={showFilters}
         onToggleFilters={() => setShowFilters((v) => !v)}
         selectedPeriodFilter={selectedPeriodFilter}
@@ -388,13 +454,18 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
       {/* Slide-Over Attendance Drawer                                  */}
       {/* ------------------------------------------------------------- */}
       {activeAttendance && (() => {
-        const { slot, meeting } = activeAttendance;
+        const { slot } = activeAttendance;
         const dateStr = selectedDayData?.dateStr ?? '';
-        const meetingId = buildMeetingId(dateStr, slot.classId, slot.sessionId, meeting?.id);
+        const dayMeeting = selectedDayMeetings.find(
+          (m) => m.sessionId === slot.sessionId && m.classId === slot.classId
+        );
+        const meetingId = buildMeetingId(dateStr, slot.classId, slot.sessionId, dayMeeting?.id);
+        const scopedUnits = getScopedUnits(db, slot.subjectId, slot.classId);
         const { units } = resolveSlotUnits(db, slot, dateStr, dayPacingMap);
         const titles = units.map((u) => u.title).join(', ');
-        const lastUnit = units[units.length - 1];
+        const lastUnit = units[units.length - 1] || scopedUnits[0];
         const maxPage = lastUnit?.page_end ?? lastUnit?.page_start;
+        const targetPage = typeof maxPage === 'number' ? maxPage : parseInt(String(maxPage), 10) || undefined;
 
         // Current slot index for Prev / Next session navigation
         const currentSlotIdx = sortedDaySlots.findIndex(
@@ -426,6 +497,7 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
 
         return (
           <AttendanceModal
+            key={meetingId}
             isAdmin={isAdmin}
             meetingId={meetingId}
             isOpen={true}
@@ -437,16 +509,17 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
             getEffectiveStatus={store.getEffectiveStatus}
             hasDraft={store.isMeetingDrafted(meetingId)}
             onSetSessionStatus={(id, next) => store.setSessionStatusDraft(id, next)}
-            targetMateri={titles || undefined}
-            targetHal={typeof maxPage === 'number' ? maxPage : parseInt(String(maxPage), 10) || undefined}
-            targetUnitId={units[0]?.id}
-            availableUnits={getScopedUnits(db, slot.subjectId, slot.classId)}
+            targetMateri={titles || scopedUnits[0]?.title || undefined}
+            targetHal={targetPage}
+            targetUnitId={units[0]?.id || scopedUnits[0]?.id}
+            availableUnits={scopedUnits}
             onPrevSession={handlePrevSession}
             onNextSession={handleNextSession}
             hasPrevSession={hasPrevSession}
             hasNextSession={hasNextSession}
             sessionTitle={sessionObj?.name}
             classTitle={classObj?.name}
+            formattedDate={formattedSelectedDate}
           />
         );
       })()}
