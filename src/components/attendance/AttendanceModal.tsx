@@ -9,7 +9,8 @@ import {
   ChevronDown,
   Search,
   BookOpen,
-  UserCheck
+  UserCheck,
+  Check
 } from 'lucide-react';
 import type {
   AttendanceStatus,
@@ -359,28 +360,61 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   const handleToggleStatus = (target: 'teacher' | string, optValue: AttendanceStatus) => {
     if (!isAdmin) return;
     const nowTime = getNowFormattedTime();
+    const meetingEndTime = data?.meeting?.endTime || '';
 
     if (target === 'teacher') {
       const nextStatus = teacherStatus === optValue ? null : optValue;
       setTeacherStatus(nextStatus);
-      if (nextStatus && !teacherTime) {
-        setTeacherTime(nowTime);
-        triggerFlash('teacher');
+
+      if (nextStatus === 'Izin' || nextStatus === 'Alpa') {
+        setTeacherTime('');
+        setTeacherTimeEnd('');
+      } else if (nextStatus === 'Hadir' || nextStatus === 'Terlambat') {
+        if (!teacherTime) {
+          setTeacherTime(nowTime);
+          if (meetingEndTime && !teacherTimeEnd) {
+            setTeacherTimeEnd(meetingEndTime);
+          }
+          triggerFlash('teacher');
+        } else if (meetingEndTime && !teacherTimeEnd) {
+          setTeacherTimeEnd(meetingEndTime);
+        }
       }
     } else {
       setStudents((prev) =>
         prev.map((s) => {
           if (s.studentId !== target) return s;
           const nextStatus = s.status === optValue ? null : optValue;
-          let nextTime = s.timestampStart;
-          if (nextStatus && !nextTime) {
-            nextTime = nowTime;
-            triggerFlash(s.studentId);
+
+          if (nextStatus === 'Izin' || nextStatus === 'Alpa') {
+            return {
+              ...s,
+              status: nextStatus,
+              timestampStart: '',
+              timestampEnd: '',
+            };
           }
+
+          let nextTime = s.timestampStart;
+          let nextTimeEnd = s.timestampEnd;
+
+          if (nextStatus === 'Hadir' || nextStatus === 'Terlambat') {
+            if (!nextTime) {
+              nextTime = nowTime;
+              if (meetingEndTime && !nextTimeEnd) {
+                nextTimeEnd = meetingEndTime;
+              }
+              triggerFlash(s.studentId);
+            } else if (meetingEndTime && !nextTimeEnd) {
+              nextTimeEnd = meetingEndTime;
+            }
+          }
+
           return {
             ...s,
             status: nextStatus,
             timestampStart: nextTime,
+            timestampEnd: nextTimeEnd,
           };
         })
       );
@@ -425,9 +459,9 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     }
   };
 
-  const matchedUnit = availableUnits.find(
-    (u) => u.title === materi || (targetUnitId && u.id === targetUnitId)
-  );
+  const matchedUnit = materi
+    ? availableUnits.find((u) => u.title === materi || u.id === materi)
+    : undefined;
 
   const [rangeMin, rangeMax] = React.useMemo(() => {
     if (!matchedUnit) return [undefined, undefined];
@@ -817,10 +851,10 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                           setMateri(defMateri);
                           setHal(defHal);
                         }}
-                        className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 transition-colors cursor-pointer"
+                        className="px-1.5 py-0.5 rounded text-[10px] font-semibold hover:bg-emerald-50 text-emerald-600 transition-colors cursor-pointer"
                         title="Isi materi & halaman sesuai kurikulum standar"
                       >
-                        Default
+                        <Check className="w-4 h-4"/>
                       </button>
                       <button
                         type="button"
@@ -828,10 +862,10 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                           setMateri('');
                           setHal('');
                         }}
-                        className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-white border border-slate-200 hover:bg-rose-50 hover:text-rose-600 text-slate-500 transition-colors cursor-pointer"
+                        className="px-1.5 py-0.5 rounded text-[10px] font-semibold hover:bg-rose-50 hover:text-rose-600 text-slate-500 transition-colors cursor-pointer"
                         title="Kosongkan materi dan halaman"
                       >
-                        Kosongkan
+                        <X className="w-4 h-4"/>
                       </button>
                     </div>
                   )}
@@ -991,6 +1025,18 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
 
                           <div className="flex items-center gap-1.5 shrink-0">
                             {/* Minimal Time Chip */}
+                            {isAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveTimePopover((p) => (p ? { ...p, startTime: '', endTime: '' } : null));
+                                  applyTimeChange(activeTimePopover.type, activeTimePopover.id, '', '');
+                                }}
+                                className="px-1 py-1 hover:bg-rose-100 text-rose-700 font-semibold rounded-full transition-colors cursor-pointer"
+                              >
+                                <X className="w-3.5 h-3.5"/>
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => {
@@ -1119,16 +1165,6 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                     className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-md transition-colors cursor-pointer"
                   >
                     Default
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveTimePopover((p) => (p ? { ...p, startTime: '', endTime: '' } : null));
-                      applyTimeChange(activeTimePopover.type, activeTimePopover.id, '', '');
-                    }}
-                    className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold rounded-md transition-colors cursor-pointer"
-                  >
-                    Kosongkan
                   </button>
                 </div>
 
