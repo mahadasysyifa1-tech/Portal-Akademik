@@ -357,6 +357,19 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     return `${hh}:${mm}`;
   };
 
+  // Schedule defaults: the same values the popover's "Default" button uses
+  const getDefaultTimes = () => ({
+    start: data?.meeting.startTime || '07:00',
+    end: data?.meeting.endTime || '08:30',
+  });
+
+  // Start after end is rejected. Both values fall back to the schedule defaults.
+  // HH:MM strings compare correctly as text.
+  const resolveTimes = (start: string, end: string) => {
+    if (start && end && start > end) return getDefaultTimes();
+    return { start, end };
+  };
+
   const handleToggleStatus = (target: 'teacher' | string, optValue: AttendanceStatus) => {
     if (!isAdmin) return;
     const nowTime = getNowFormattedTime();
@@ -370,53 +383,29 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
         setTeacherTime('');
         setTeacherTimeEnd('');
       } else if (nextStatus === 'Hadir' || nextStatus === 'Terlambat') {
-        if (!teacherTime) {
-          setTeacherTime(nowTime);
-          if (meetingEndTime && !teacherTimeEnd) {
-            setTeacherTimeEnd(meetingEndTime);
-          }
-          triggerFlash('teacher');
-        } else if (meetingEndTime && !teacherTimeEnd) {
-          setTeacherTimeEnd(meetingEndTime);
-        }
+        const r = resolveTimes(teacherTime || nowTime, teacherTimeEnd || meetingEndTime);
+        setTeacherTime(r.start);
+        setTeacherTimeEnd(r.end);
+        if (!teacherTime) triggerFlash('teacher');
       }
     } else {
       setStudents((prev) =>
-        prev.map((s) => {
-          if (s.studentId !== target) return s;
-          const nextStatus = s.status === optValue ? null : optValue;
+      prev.map((s) => {
+        if (s.studentId !== target) return s;
+        const nextStatus = s.status === optValue ? null : optValue;
 
-          if (nextStatus === 'Izin' || nextStatus === 'Alpa') {
-            return {
-              ...s,
-              status: nextStatus,
-              timestampStart: '',
-              timestampEnd: '',
-            };
-          }
+        if (nextStatus === 'Izin' || nextStatus === 'Alpa') {
+          return { ...s, status: nextStatus, timestampStart: '', timestampEnd: '' };
+        }
 
-          let nextTime = s.timestampStart;
-          let nextTimeEnd = s.timestampEnd;
+        if (nextStatus === 'Hadir' || nextStatus === 'Terlambat') {
+          const r = resolveTimes(s.timestampStart || nowTime, s.timestampEnd || meetingEndTime);
+          if (!s.timestampStart) triggerFlash(s.studentId);
+          return { ...s, status: nextStatus, timestampStart: r.start, timestampEnd: r.end };
+        }
 
-          if (nextStatus === 'Hadir' || nextStatus === 'Terlambat') {
-            if (!nextTime) {
-              nextTime = nowTime;
-              if (meetingEndTime && !nextTimeEnd) {
-                nextTimeEnd = meetingEndTime;
-              }
-              triggerFlash(s.studentId);
-            } else if (meetingEndTime && !nextTimeEnd) {
-              nextTimeEnd = meetingEndTime;
-            }
-          }
-
-          return {
-            ...s,
-            status: nextStatus,
-            timestampStart: nextTime,
-            timestampEnd: nextTimeEnd,
-          };
-        })
+        return { ...s, status: nextStatus };
+      })
       );
     }
   };
@@ -425,11 +414,10 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     if (!isAdmin) return;
     const nowTime = getNowFormattedTime();
     setStudents((prev) =>
-      prev.map((s) => ({
-        ...s,
-        status,
-        timestampStart: s.timestampStart || nowTime,
-      }))
+    prev.map((s) => {
+      const r = resolveTimes(s.timestampStart || nowTime, s.timestampEnd);
+      return { ...s, status, timestampStart: r.start, timestampEnd: r.end };
+    })
     );
   };
 
@@ -449,12 +437,13 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   };
 
   const applyTimeChange = (type: 'teacher' | 'student', id: string, start: string, end: string) => {
+    const r = resolveTimes(start, end);
     if (type === 'teacher') {
-      setTeacherTime(start);
-      setTeacherTimeEnd(end);
+      setTeacherTime(r.start);
+      setTeacherTimeEnd(r.end);
     } else {
       setStudents((prev) =>
-        prev.map((s) => (s.studentId === id ? { ...s, timestampStart: start, timestampEnd: end } : s))
+      prev.map((s) => (s.studentId === id ? { ...s, timestampStart: r.start, timestampEnd: r.end } : s))
       );
     }
   };
@@ -1025,16 +1014,14 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
 
                           <div className="flex items-center gap-1.5 shrink-0">
                             {/* Minimal Time Chip */}
-                            {isAdmin && (
+                            {isAdmin && (student.timestampStart || student.timestampEnd) && (
                               <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveTimePopover((p) => (p ? { ...p, startTime: '', endTime: '' } : null));
-                                  applyTimeChange(activeTimePopover.type, activeTimePopover.id, '', '');
-                                }}
-                                className="px-1 py-1 hover:bg-rose-100 text-rose-700 font-semibold rounded-full transition-colors cursor-pointer"
+                              type="button"
+                              onClick={() => applyTimeChange('student', student.studentId, '', '')}
+                              title="Hapus jam"
+                              className="px-1 py-1 hover:bg-rose-100 text-rose-700 font-semibold rounded-full transition-colors cursor-pointer"
                               >
-                                <X className="w-3.5 h-3.5"/>
+                                <X className="w-3.5 h-3.5" />
                               </button>
                             )}
                             <button
@@ -1090,94 +1077,58 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
         </div>
       </div>
 
-      {/* ------------------------------------------------------------- */}
-      {/* Minimal Time Popover with backdrop click-outside              */}
-      {/* ------------------------------------------------------------- */}
+      {/* Micro time popover: name, start, end, default. Backdrop click closes. */}
       {activeTimePopover && (
         <div
-          className="fixed inset-0 z-60 bg-black/25 flex items-center justify-center p-4 pointer-events-auto animate-in fade-in"
-          onClick={() => setActiveTimePopover(null)}
+        className="fixed inset-0 z-60 bg-black/25 flex items-center justify-center p-4 pointer-events-auto animate-in fade-in"
+        onClick={() => setActiveTimePopover(null)}
         >
-          <div
-            className="bg-white rounded-2xl shadow-2xl border border-slate-200 p-4 w-72 space-y-3"
-            onClick={(e) => e.stopPropagation()}
+        <div
+        className="bg-white rounded-xl shadow-2xl border border-slate-200 p-3 w-60 space-y-2"
+        onClick={(e) => e.stopPropagation()}
+        >
+        <div className="text-xs font-bold text-slate-800 truncate">{activeTimePopover.name}</div>
+
+        <div className="flex items-center gap-2">
+        <input
+        type="time"
+        value={activeTimePopover.startTime}
+        disabled={!isAdmin}
+        onChange={(e) => {
+          const r = resolveTimes(e.target.value, activeTimePopover.endTime);
+          setActiveTimePopover((p) => (p ? { ...p, startTime: r.start, endTime: r.end } : null));
+          applyTimeChange(activeTimePopover.type, activeTimePopover.id, r.start, r.end);
+        }}
+        className="flex-1 min-w-0 px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-amber-400"
+        />
+        <span className="text-slate-400 text-xs">–</span>
+        <input
+        type="time"
+        value={activeTimePopover.endTime}
+        disabled={!isAdmin}
+        onChange={(e) => {
+          const r = resolveTimes(activeTimePopover.startTime, e.target.value);
+          setActiveTimePopover((p) => (p ? { ...p, startTime: r.start, endTime: r.end } : null));
+          applyTimeChange(activeTimePopover.type, activeTimePopover.id, r.start, r.end);
+        }}
+        className="flex-1 min-w-0 px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-amber-400"
+        />
+        {isAdmin && (
+          <button
+          type="button"
+          title="Jam jadwal"
+          onClick={() => {
+            const { start, end } = getDefaultTimes();
+            setActiveTimePopover((p) => (p ? { ...p, startTime: start, endTime: end } : null));
+            applyTimeChange(activeTimePopover.type, activeTimePopover.id, start, end);
+          }}
+          className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer shrink-0"
           >
-            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-              <div className="text-xs font-bold text-slate-800 truncate">
-                Waktu: {activeTimePopover.name}
-              </div>
-              <button
-                type="button"
-                onClick={() => setActiveTimePopover(null)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-md"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2.5 text-xs">
-              <div>
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                  Mulai
-                </label>
-                <input
-                  type="time"
-                  value={activeTimePopover.startTime}
-                  disabled={!isAdmin}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setActiveTimePopover((p) => (p ? { ...p, startTime: val } : null));
-                    applyTimeChange(activeTimePopover.type, activeTimePopover.id, val, activeTimePopover.endTime);
-                  }}
-                  className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-amber-400"
-                />
-              </div>
-
-              <div>
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                  Selesai
-                </label>
-                <input
-                  type="time"
-                  value={activeTimePopover.endTime}
-                  disabled={!isAdmin}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setActiveTimePopover((p) => (p ? { ...p, endTime: val } : null));
-                    applyTimeChange(activeTimePopover.type, activeTimePopover.id, activeTimePopover.startTime, val);
-                  }}
-                  className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-amber-400"
-                />
-              </div>
-            </div>
-
-            {isAdmin && (
-              <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[10px]">
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const defStart = data?.meeting.startTime || '07:00';
-                      const defEnd = data?.meeting.endTime || '08:30';
-                      setActiveTimePopover((p) => (p ? { ...p, startTime: defStart, endTime: defEnd } : null));
-                      applyTimeChange(activeTimePopover.type, activeTimePopover.id, defStart, defEnd);
-                    }}
-                    className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-md transition-colors cursor-pointer"
-                  >
-                    Default
-                  </button>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTimePopover(null)}
-                  className="px-2.5 py-1 bg-[#024884] hover:bg-[#013563] text-white font-bold rounded-md transition-colors cursor-pointer"
-                >
-                  Selesai
-                </button>
-              </div>
-            )}
-          </div>
+          <Check className="w-3.5 h-3.5" />
+          </button>
+        )}
+        </div>
+        </div>
         </div>
       )}
     </div>
