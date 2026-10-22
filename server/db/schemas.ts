@@ -323,7 +323,6 @@ CREATE TABLE IF NOT EXISTS attnd_meeting (
     id TEXT PRIMARY KEY,
     meeting_date TEXT NOT NULL,
     meeting_index INTEGER,
-    active_meeting_index INTEGER,
     present_count INTEGER DEFAULT 0,
     absent_count INTEGER DEFAULT 0,
     enrolled_count INTEGER DEFAULT 0,
@@ -338,6 +337,8 @@ CREATE TABLE IF NOT EXISTS attnd_meeting (
     session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
     rule_code TEXT,
     status TEXT NOT NULL DEFAULT 'scheduled',
+    actual_materi_id TEXT,
+    actual_page INTEGER,
     notes TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -349,6 +350,7 @@ CREATE INDEX IF NOT EXISTS idx_meeting_class_subject ON attnd_meeting(class_id, 
 CREATE INDEX IF NOT EXISTS idx_meeting_teacher ON attnd_meeting(teacher_id);
 CREATE INDEX IF NOT EXISTS idx_meeting_date_session_order ON attnd_meeting(meeting_date, session_id, status);
 CREATE INDEX IF NOT EXISTS idx_meeting_class_subj_date ON attnd_meeting(class_id, subject_id, meeting_date, status);
+CREATE INDEX IF NOT EXISTS idx_meeting_class_subj_actual_page ON attnd_meeting(class_id, subject_id, actual_page);
 CREATE INDEX IF NOT EXISTS idx_meeting_month_lookup ON attnd_meeting(meeting_date, status);
 
 CREATE TABLE IF NOT EXISTS attnd_meeting_log (

@@ -56,7 +56,7 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
   // Calendar position (defaults to today, local time)
   const [currentYear, setCurrentYear] = useState<number>(() => new Date().getFullYear());
   const [currentMonth, setCurrentMonth] = useState<number>(() => new Date().getMonth()); // 0-11
-  const [selectedDateStr, setSelectedDateStr] = useState<string>(() => toLocalDateStr(new Date()));
+  const [selectedDateStr, setSelectedDateStr] = useState<string>('');
 
   // Filters
   const [selectedPeriodFilter, setSelectedPeriodFilter] = useState<string>('all');
@@ -166,9 +166,8 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
   const monthlyStats = useMemo(() => computeMonthlyStats(jurnalDays), [jurnalDays]);
 
   const selectedDayData = useMemo(() => {
-    const found = jurnalDays.find((d) => d.dateStr === selectedDateStr);
-    if (found) return found;
-    return jurnalDays.find((d) => d.isCurrentMonth) || null;
+    if (!selectedDateStr) return null;
+    return jurnalDays.find((d) => d.dateStr === selectedDateStr) || null;
   }, [selectedDateStr, jurnalDays]);
 
   const sortedDaySlots = useMemo(() => {
@@ -250,6 +249,13 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
     );
     setActiveAttendance({ slot: firstSlot, meeting: nextMeeting });
   }, [selectedDayData?.dateStr, monthMeetingsMap]);
+
+  // If day selection is cleared, close any open attendance drawer
+  useEffect(() => {
+    if (!selectedDayData && activeAttendance) {
+      setActiveAttendance(null);
+    }
+  }, [selectedDayData, activeAttendance]);
 
   // Navigation
   const handlePrevMonth = () => {

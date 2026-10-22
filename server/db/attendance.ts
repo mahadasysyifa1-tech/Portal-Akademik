@@ -38,6 +38,8 @@ export interface MeetingSummaryRow {
   startTime: string;
   endTime: string;
   status: 'scheduled' | 'completed' | 'cancelled';
+  actual_materi_id?: string;
+  actual_page?: number;
   notes?: string;
   summary: {
     totalEnrolled: number;
@@ -479,6 +481,8 @@ export async function getMeetingRollCall(
       startTime: m.start_time || '08:00',
       endTime: m.end_time || '10:00',
       status: m.status as any,
+      actual_materi_id: m.actual_materi_id || undefined,
+      actual_page: m.actual_page !== null && m.actual_page !== undefined ? Number(m.actual_page) : undefined,
       notes: m.notes,
       summary: {
         totalEnrolled: studentList.length,
@@ -522,21 +526,12 @@ export async function saveMeetingRollCall(
 ): Promise<void> {
   const statements: Array<{ sql: string; args: any[] }> = [];
 
-  let finalNotes = meetingNotes || null;
-  if (materialProgress && (materialProgress.materi || materialProgress.hal !== undefined)) {
-    try {
-      let existingObj: Record<string, any> = {};
-      if (meetingNotes && meetingNotes.startsWith('{')) {
-        try { existingObj = JSON.parse(meetingNotes); } catch {}
-      } else if (meetingNotes) {
-        existingObj.summary = meetingNotes;
-      }
-      existingObj.materialProgress = materialProgress;
-      finalNotes = JSON.stringify(existingObj);
-    } catch {
-      // fallback
-    }
-  }
+  const actualMateriId = materialProgress?.unitId || materialProgress?.materi || null;
+  const actualPage =
+    materialProgress?.hal !== undefined && materialProgress.hal !== '' && !isNaN(Number(materialProgress.hal))
+      ? Number(materialProgress.hal)
+      : null;
+  const cleanNotes = meetingNotes ? meetingNotes.trim() : null;
 
   // Precalculate helper aggregation counts (logged students only)
   // Both 'Hadir' and 'Terlambat' count as present attendees
@@ -546,18 +541,20 @@ export async function saveMeetingRollCall(
   const enrolledCount = studentLogs.length;
   const isLoggedNow = loggedStudents.length > 0 || (teacherLog && !!teacherLog.status) ? 1 : 0;
 
-  // Update meeting status and helper summary columns in one atomic write
+  // Update meeting status, progress columns, and clean plain-text notes in one atomic write
   statements.push({
     sql: `UPDATE attnd_meeting 
           SET status = CASE WHEN status = 'cancelled' THEN 'cancelled' ELSE (CASE WHEN ? = 1 THEN 'completed' ELSE 'scheduled' END) END,
               notes = ?, 
+              actual_materi_id = ?,
+              actual_page = ?,
               present_count = ?, 
               absent_count = ?, 
               enrolled_count = ?, 
               is_logged = ?, 
               updated_at = CURRENT_TIMESTAMP 
           WHERE id = ?`,
-    args: [isLoggedNow, finalNotes, hadirCount, absentCount, enrolledCount, isLoggedNow, meetingId],
+    args: [isLoggedNow, cleanNotes, actualMateriId, actualPage, hadirCount, absentCount, enrolledCount, isLoggedNow, meetingId],
   });
 
   // Upsert or Delete Teacher Log
@@ -639,6 +636,8 @@ export async function getMonthMeetings(
       m.session_id,
       m.rule_code,
       m.status,
+      m.actual_materi_id,
+      m.actual_page,
       m.notes,
       c.name as class_name,
       c.color as class_color,
@@ -704,6 +703,8 @@ export async function getMonthMeetings(
       startTime: m.start_time || '08:00',
       endTime: m.end_time || '10:00',
       status: m.status as any,
+      actual_materi_id: m.actual_materi_id || undefined,
+      actual_page: m.actual_page !== null && m.actual_page !== undefined ? Number(m.actual_page) : undefined,
       notes: m.notes,
       summary: {
         totalEnrolled,
@@ -757,31 +758,26 @@ export async function batchSaveAttendance(
       const hadirCount = loggedStudents.filter((s) => s.status === 'Hadir').length;
       const absentCount = loggedStudents.filter((s) => s.status !== 'Hadir').length;
       const enrolledCount = studentLogs.length;
-      let finalNotes = meetingNotes || null;
-      if (materialProgress && (materialProgress.materi || materialProgress.hal !== undefined)) {
-        try {
-          let existingObj: Record<string, any> = {};
-          if (meetingNotes && meetingNotes.startsWith('{')) {
-            try { existingObj = JSON.parse(meetingNotes); } catch {}
-          } else if (meetingNotes) {
-            existingObj.summary = meetingNotes;
-          }
-          existingObj.materialProgress = materialProgress;
-          finalNotes = JSON.stringify(existingObj);
-        } catch {}
-      }
+      const actualMateriId = materialProgress?.unitId || materialProgress?.materi || null;
+      const actualPage =
+        materialProgress?.hal !== undefined && materialProgress.hal !== null && !isNaN(Number(materialProgress.hal))
+          ? Number(materialProgress.hal)
+          : null;
+      const cleanNotes = meetingNotes ? meetingNotes.trim() : null;
 
       statements.push({
         sql: `UPDATE attnd_meeting 
               SET status = CASE WHEN status = 'cancelled' THEN 'cancelled' ELSE 'completed' END,
                   notes = ?, 
+                  actual_materi_id = ?,
+                  actual_page = ?,
                   present_count = ?, 
                   absent_count = ?, 
                   enrolled_count = ?, 
                   is_logged = 1, 
                   updated_at = CURRENT_TIMESTAMP 
               WHERE id = ?`,
-        args: [finalNotes, hadirCount, absentCount, enrolledCount, meetingId],
+        args: [cleanNotes, actualMateriId, actualPage, hadirCount, absentCount, enrolledCount, meetingId],
       });
 
       if (teacherLog && teacherLog.id && teacherLog.status) {

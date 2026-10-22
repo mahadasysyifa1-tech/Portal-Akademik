@@ -14,7 +14,8 @@ import {
   KaldikEvent,
   Book,
   Material,
-  SyllabusScopeItem
+  SyllabusScopeItem,
+  MeetingRecord
 } from '../types';
 
 export function normalizeKaldikEvent(raw: any): KaldikEvent {
@@ -524,6 +525,27 @@ export function normalizeDatabaseState(raw: any): DatabaseState {
     normalizeKaldikEvent
   );
 
+  const meetings: MeetingRecord[] | undefined = Array.isArray(raw.meetings)
+    ? raw.meetings.map((m: any) => ({
+        id: String(m.id),
+        meeting_date: String(m.meeting_date || m.meetingDate || ''),
+        meeting_index: typeof m.meeting_index === 'number' ? m.meeting_index : typeof m.meetingIndex === 'number' ? m.meetingIndex : undefined,
+        active_meeting_index: typeof m.active_meeting_index === 'number' ? m.active_meeting_index : typeof m.activeMeetingIndex === 'number' ? m.activeMeetingIndex : undefined,
+        class_id: String(m.class_id || m.classId || ''),
+        subject_id: String(m.subject_id || m.subjectId || ''),
+        teacher_id: m.teacher_id || m.teacherId || undefined,
+        room_id: m.room_id || m.roomId || undefined,
+        session_id: m.session_id || m.sessionId || undefined,
+        rule_code: m.rule_code || m.ruleCode || undefined,
+        status: (m.status === 'cancelled' || m.status === 'completed' || m.status === 'scheduled') ? m.status : 'scheduled',
+        actual_materi_id: m.actual_materi_id || m.actualMateriId || undefined,
+        actual_page: typeof m.actual_page === 'number' ? m.actual_page : typeof m.actualPage === 'number' ? m.actualPage : undefined,
+        notes: m.notes || undefined,
+        target_unit_id: m.target_unit_id || m.targetUnitId || undefined,
+        target_page_range: m.target_page_range || m.targetPageRange || undefined
+      }))
+    : undefined;
+
   return {
     subjects,
     classes,
@@ -539,5 +561,6 @@ export function normalizeDatabaseState(raw: any): DatabaseState {
     syllabusScopes,
     students: Array.isArray(raw.students) ? raw.students : undefined,
     enrollments: Array.isArray(raw.enrollments) ? raw.enrollments : undefined,
+    meetings
   };
 }

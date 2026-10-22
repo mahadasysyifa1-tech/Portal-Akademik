@@ -1,3 +1,4 @@
+// session list in jurnal mode day detail
 import React from 'react';
 import { Plus, Sparkles } from 'lucide-react';
 import type { Period } from '../../types';

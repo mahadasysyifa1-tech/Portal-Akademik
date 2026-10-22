@@ -3,14 +3,14 @@ import {
   X,
   AlertCircle,
   Clock,
-  RotateCcw,
+  Trash,
   Ban,
   ChevronUp,
   ChevronDown,
   Search,
   BookOpen,
   UserCheck,
-  Check
+  Pencil
 } from 'lucide-react';
 import type {
   AttendanceStatus,
@@ -681,7 +681,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                   className="p-1.5 rounded-lg bg-amber-700 hover:bg-amber-800 text-white transition-colors cursor-pointer"
                   title="Batalkan perubahan draft"
                 >
-                  <RotateCcw className="w-4 h-4" />
+                  <Trash className="w-4 h-4" />
                 </button>
               )}
 
@@ -843,7 +843,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                         className="px-1.5 py-0.5 rounded text-[10px] font-semibold hover:bg-emerald-50 text-emerald-600 transition-colors cursor-pointer"
                         title="Isi materi & halaman sesuai kurikulum standar"
                       >
-                        <Check className="w-4 h-4"/>
+                        <Pencil className="w-4 h-4"/>
                       </button>
                       <button
                         type="button"
@@ -898,6 +898,16 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
 
                       <div className="flex items-center gap-1.5 shrink-0">
                         {/* Minimal Time Chip */}
+                        {isAdmin && (teacherTime || teacherTimeEnd) && (
+                          <button
+                            type="button"
+                            onClick={() => applyTimeChange('teacher', 'teacher', '', '')}
+                            title="Hapus jam"
+                            className="px-1 py-1 hover:bg-rose-100 text-rose-700 font-semibold rounded-full transition-colors cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => {
@@ -1014,7 +1024,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
 
                           <div className="flex items-center gap-1.5 shrink-0">
                             {/* Minimal Time Chip */}
-                            {isAdmin && (student.timestampStart || student.timestampEnd) && (
+                            {isAdmin && (student.timestampStart || student.timestampEnd)  && (
                               <button
                               type="button"
                               onClick={() => applyTimeChange('student', student.studentId, '', '')}
@@ -1124,7 +1134,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
           }}
           className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer shrink-0"
           >
-          <Check className="w-3.5 h-3.5" />
+          <Pencil className="w-3.5 h-3.5" />
           </button>
         )}
         </div>

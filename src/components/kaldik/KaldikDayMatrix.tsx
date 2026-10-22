@@ -1,3 +1,4 @@
+// Day matrix (chips) in jurnal mode
 import React from 'react';
 import { Clock, BookOpen, Users, DoorOpen } from 'lucide-react';
 import type {

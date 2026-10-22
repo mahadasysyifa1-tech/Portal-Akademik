@@ -1,3 +1,4 @@
+// day detail in kaldik mode
 import React from 'react';
 import { CalendarDays, Clock, AlertCircle, Pencil, Trash2 } from 'lucide-react';
 import type { KaldikEvent, Period } from '../../types';

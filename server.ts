@@ -8,6 +8,7 @@ import {
   getDatabaseState,
   saveDatabaseState,
   resetDatabaseState,
+  invalidateDatabaseStateCache,
   tursoClient,
   METADATA_SCHEMA_SQL,
   KALDIK_SCHEMA_SQL,
@@ -208,6 +209,7 @@ app.post('/api/attendance/meetings/:meetingId/logs', async (req, res) => {
   const { teacherLog, studentLogs, meetingNotes, materialProgress } = req.body;
   try {
     await saveMeetingRollCall(tursoClient, meetingId, teacherLog, studentLogs || [], meetingNotes, materialProgress);
+    invalidateDatabaseStateCache();
     res.json({ success: true, savedAt: new Date().toISOString(), meetingId });
   } catch (err: any) {
     console.error('Failed to save meeting roll-call:', err);
@@ -226,6 +228,7 @@ app.post('/api/attendance/meetings/:meetingId/status', async (req, res) => {
   }
   try {
     await updateMeetingStatus(tursoClient, meetingId, status);
+    invalidateDatabaseStateCache();
     res.json({ success: true, meetingId, status, updatedAt: new Date().toISOString() });
   } catch (err: any) {
     console.error('Failed to update meeting status:', err);

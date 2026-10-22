@@ -140,22 +140,37 @@ export const SyllabusView: React.FC<SyllabusViewProps> = ({
   const applicableClasses = useMemo(() => {
     if (!selectedSubjectId) return [];
     const allRules = (db.rules || []).filter(
-      (r) => r.active !== false && r.subjectId === selectedSubjectId
+      (r) => r.active !== false && (r.subjectId === selectedSubjectId || (r as any).subject_id === selectedSubjectId)
     );
-    const classIds = allRules.map((r) => r.classId);
+    const classIds = allRules.map((r) => r.classId || (r as any).class_id);
+    if (db.meetings && db.meetings.length > 0) {
+      const meetingClassIds = db.meetings
+        .filter((m) => m.subject_id === selectedSubjectId)
+        .map((m) => m.class_id);
+      classIds.push(...meetingClassIds);
+    }
     const uniqueClassIds = Array.from(new Set(classIds));
     const classMap = new Map((db.classes || []).map((c) => [c.id, c]));
-    return uniqueClassIds.map((cid) => classMap.get(cid)).filter(Boolean) as typeof db.classes;
-  }, [selectedSubjectId, db.rules, db.classes]);
+    return uniqueClassIds
+      .map((cid) => classMap.get(cid) || (db.classes || []).find((c) => c.display_code === cid || c.code === cid))
+      .filter(Boolean) as typeof db.classes;
+  }, [selectedSubjectId, db.rules, db.classes, db.meetings]);
 
   const handleSelectSubject = (subId: string) => {
     setSelectedSubjectId(subId);
     onClearInitialDeepLink?.();
 
     const allRules = (db.rules || []).filter(
-      (r) => r.active !== false && r.subjectId === subId
+      (r) => r.active !== false && (r.subjectId === subId || (r as any).subject_id === subId)
     );
-    const uniqueClassIds = Array.from(new Set(allRules.map((r) => r.classId)));
+    const classIds = allRules.map((r) => r.classId || (r as any).class_id);
+    if (db.meetings && db.meetings.length > 0) {
+      const meetingClassIds = db.meetings
+        .filter((m) => m.subject_id === subId)
+        .map((m) => m.class_id);
+      classIds.push(...meetingClassIds);
+    }
+    const uniqueClassIds = Array.from(new Set(classIds));
 
     if (uniqueClassIds.length === 1) {
       setSelectedClassId(uniqueClassIds[0]);
@@ -208,27 +223,59 @@ export const SyllabusView: React.FC<SyllabusViewProps> = ({
       return acc + 1;
     }, 0);
 
-    let pagesPerSession = projection.length > 0
-      ? (totalPages / projection.length).toFixed(1)
+    const activeProjections = projection.filter((p) => !p.session.isCancelled);
+    const activeCount = activeProjections.length;
+
+    let pagesPerSession = activeCount > 0
+      ? (totalPages / activeCount).toFixed(1)
       : '0';
 
-    const adj = existingScope?.adjustment;
-    if (adj && projection.length > 0) {
-      let checkpointIdx = projection.findIndex(
-        (p) => p.session.meetingIndex === adj.checkpointSessionIndex
+    let adj = existingScope?.adjustment;
+    if (!adj && activeCount > 0) {
+      const recordedActiveSessions = activeProjections.filter(
+        (p) => typeof p.session.actual_page === 'number' && p.session.actual_page > 0
+      );
+      if (recordedActiveSessions.length > 0) {
+        const latestRecorded = recordedActiveSessions[recordedActiveSessions.length - 1];
+        adj = {
+          checkpointSessionIndex: latestRecorded.session.meetingIndex,
+          checkpointSessionId: latestRecorded.session.id,
+          checkpointDate: latestRecorded.session.date,
+          checkpointUnitId: latestRecorded.session.actual_materi_id || '',
+          checkpointPage: latestRecorded.session.actual_page || 1,
+          strategy: 'accelerate',
+          cutUnitIds: []
+        };
+      }
+    }
+
+    if (adj && activeCount > 0) {
+      let checkpointIdx = activeProjections.findIndex(
+        (p) => p.session.meetingIndex === adj!.checkpointSessionIndex
       );
       if (checkpointIdx === -1 && adj.checkpointSessionId) {
-        checkpointIdx = projection.findIndex((p) => p.session.id === adj.checkpointSessionId);
+        checkpointIdx = activeProjections.findIndex((p) => p.session.id === adj!.checkpointSessionId);
       }
       if (checkpointIdx === -1 && adj.checkpointDate) {
-        checkpointIdx = projection.findIndex((p) => p.session.date === adj.checkpointDate);
+        checkpointIdx = activeProjections.findIndex((p) => p.session.date === adj!.checkpointDate);
       }
       if (checkpointIdx === -1) {
         checkpointIdx = 0;
       }
 
-      const remainingSessionCount = Math.max(1, projection.length - checkpointIdx);
-      const currUnitIdx = scopedUnits.findIndex((u) => u.id === adj.checkpointUnitId);
+      const remainingSessionCount = Math.max(1, activeProjections.length - checkpointIdx);
+      let currUnitIdx = -1;
+      if (adj.checkpointUnitId) {
+        currUnitIdx = scopedUnits.findIndex((u) => u.id === adj!.checkpointUnitId);
+      }
+      if (currUnitIdx === -1 && typeof adj.checkpointPage === 'number') {
+        currUnitIdx = scopedUnits.findIndex((u) => {
+          const pStart = typeof u.page_start === 'number' ? u.page_start : parseInt(String(u.page_start), 10) || 1;
+          const pEnd = typeof u.page_end === 'number' ? u.page_end : parseInt(String(u.page_end), 10) || 100;
+          return adj!.checkpointPage >= pStart && adj!.checkpointPage <= pEnd;
+        });
+      }
+
       const cutSet = new Set(adj.strategy === 'cut' ? (adj.cutUnitIds || []) : []);
 
       let remPages = 0;
@@ -271,9 +318,7 @@ export const SyllabusView: React.FC<SyllabusViewProps> = ({
   }, [db, selectedSubjectId, selectedClassId, existingScope]);
 
   const displayNumber = (slotIdx: number) => {
-    const adj = existingScope?.adjustment;
-    if (!adj?.checkpointSessionNumber || slotIdx < adj.checkpointSessionIndex) return slotIdx;
-    return slotIdx - adj.checkpointSessionIndex + adj.checkpointSessionNumber;
+    return Math.max(1, slotIdx);
   };
 
   const currentSessionItem = useMemo(() => {

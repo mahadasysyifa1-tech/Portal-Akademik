@@ -289,6 +289,26 @@ export interface DatabaseState {
   syllabusScopes?: SyllabusScope[];
   students?: StudentRecord[];
   enrollments?: EnrollmentRecord[];
+  meetings?: MeetingRecord[];
+}
+
+export interface MeetingRecord {
+  id: string;
+  meeting_date: string;
+  meeting_index?: number;
+  active_meeting_index?: number;
+  class_id: string;
+  subject_id: string;
+  teacher_id?: string;
+  room_id?: string;
+  session_id?: string;
+  rule_code?: string;
+  status: 'scheduled' | 'completed' | 'cancelled';
+  actual_materi_id?: string;
+  actual_page?: number;
+  notes?: string;
+  target_unit_id?: string;
+  target_page_range?: string;
 }
 
 export interface StudentRecord {
@@ -388,6 +408,11 @@ export interface ScheduledSessionOccurrence {
   roomId: string;
   periodId: string;
   meetingIndex: number; // 1-based index for this subject & class in the term
+  status?: 'scheduled' | 'completed' | 'cancelled';
+  isCancelled?: boolean;
+  actual_materi_id?: string;
+  actual_page?: number;
+  meetingNotes?: string;
 }
 
 export type SaveStatus =

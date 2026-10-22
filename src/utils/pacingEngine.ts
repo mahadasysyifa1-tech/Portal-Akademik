@@ -199,8 +199,112 @@ export function getScheduledSessionsForSubjectClass(
   subject_id: string,
   class_section_id: string
 ): ScheduledSessionOccurrence[] {
-  const occurrences: ScheduledSessionOccurrence[] = [];
   const sessionMap = new Map((db.sessions || []).map((s) => [s.id, s]));
+
+  // Check if real meeting records exist in db.meetings
+  if (db.meetings && db.meetings.length > 0) {
+    const targetSubject = (db.subjects || []).find(
+      (s) => s.id === subject_id || s.code === subject_id || s.display_code === subject_id || s.displayCode === subject_id
+    );
+    const targetClass = (db.classes || []).find(
+      (c) => c.id === class_section_id || (c as any).code === class_section_id || c.display_code === class_section_id || c.displayCode === class_section_id
+    );
+
+    const norm = (val?: string) => (val ? String(val).trim().toLowerCase() : '');
+    const sNorm = norm(subject_id);
+    const cNorm = norm(class_section_id);
+
+    const matchesSubject = (mSub: string) => {
+      const msNorm = norm(mSub);
+      if (msNorm === sNorm) return true;
+      if (targetSubject) {
+        return (
+          msNorm === norm(targetSubject.id) ||
+          msNorm === norm(targetSubject.code) ||
+          msNorm === norm(targetSubject.display_code) ||
+          msNorm === norm(targetSubject.displayCode)
+        );
+      }
+      return false;
+    };
+
+    const matchesClass = (mCls: string) => {
+      const mcNorm = norm(mCls);
+      if (mcNorm === cNorm) return true;
+      if (targetClass) {
+        return (
+          mcNorm === norm(targetClass.id) ||
+          mcNorm === norm((targetClass as any).code) ||
+          mcNorm === norm(targetClass.display_code) ||
+          mcNorm === norm(targetClass.displayCode)
+        );
+      }
+      return false;
+    };
+
+    const matchedMeetings = db.meetings.filter(
+      (m) => matchesSubject(m.subject_id) && matchesClass(m.class_id)
+    );
+
+    if (matchedMeetings.length > 0) {
+      // Sort chronologically by date, then session start time
+      const sorted = [...matchedMeetings].sort((a, b) => {
+        const dComp = a.meeting_date.localeCompare(b.meeting_date);
+        if (dComp !== 0) return dComp;
+        const sa = sessionMap.get(a.session_id || '');
+        const sb = sessionMap.get(b.session_id || '');
+        const ta = sa?.startTime || (sa as any)?.start_time || '08:00';
+        const tb = sb?.startTime || (sb as any)?.start_time || '08:00';
+        return ta.localeCompare(tb);
+      });
+
+      let activeSeq = 1;
+      return sorted.map((m) => {
+        const isCancelled = m.status === 'cancelled' || String(m.status).toLowerCase().includes('cancel') || String(m.status).toLowerCase().includes('batal');
+        const sessionObj = sessionMap.get(m.session_id || '');
+        const startTime = sessionObj?.startTime || (sessionObj as any)?.start_time || '08:00';
+        const endTime = sessionObj?.endTime || (sessionObj as any)?.end_time || '10:00';
+
+        const parts = m.meeting_date.split('-');
+        let dow: DayOfWeek = 'Monday';
+        if (parts.length === 3) {
+          const d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+          dow = JS_DOW_TO_DAYOFWEEK[d.getDay()] || 'Monday';
+        }
+
+        const meetingIndex = isCancelled ? 0 : activeSeq++;
+
+        const matchingPeriod = (db.periods || []).find(
+          (p) => (p.startDate || (p as any).start_date || '') <= m.meeting_date && m.meeting_date <= (p.endDate || (p as any).end_date || '')
+        );
+
+        return {
+          id: m.id,
+          date: m.meeting_date,
+          day: dow,
+          sessionId: m.session_id || '',
+          sessionName: sessionObj?.name || m.session_id || 'Sesi',
+          startTime,
+          endTime,
+          ruleId: m.rule_code || '',
+          subjectId: subject_id,
+          classId: class_section_id,
+          teacherId: m.teacher_id || '',
+          roomId: m.room_id || '',
+          periodId: matchingPeriod?.id || '',
+          meetingIndex,
+          status: m.status,
+          isCancelled,
+          actual_materi_id: m.actual_materi_id,
+          actual_page: m.actual_page,
+          meetingNotes: m.notes
+        };
+      });
+    }
+  }
+
+  // Fallback to rules-based calculation if db.meetings is empty or not matching
+  const occurrences: ScheduledSessionOccurrence[] = [];
 
   const activeRules = (db.rules || []).filter(
     (r) =>
@@ -295,6 +399,15 @@ export function getScheduledSessionsForSubjectClass(
  */
 export function getAllScheduledMeetingsCountMap(db: DatabaseState): Map<string, number> {
   const countMap = new Map<string, number>();
+
+  if (db.meetings && db.meetings.length > 0) {
+    for (const m of db.meetings) {
+      if (m.status === 'cancelled') continue;
+      const key = `${m.subject_id}_${m.class_id}`;
+      countMap.set(key, (countMap.get(key) || 0) + 1);
+    }
+    return countMap;
+  }
   const seenOccurrenceKeys = new Set<string>();
   const activeRules = (db.rules || []).filter((r) => r.active !== false);
 
@@ -517,7 +630,18 @@ function buildAdjustedRemainingUnits(
   units: SyllabusUnit[],
   adjustment: NonNullable<SyllabusScope['adjustment']>
 ): SyllabusUnit[] {
-  const currUnitIdx = units.findIndex((u) => u.id === adjustment.checkpointUnitId);
+  let currUnitIdx = -1;
+  if (adjustment.checkpointUnitId) {
+    currUnitIdx = units.findIndex((u) => u.id === adjustment.checkpointUnitId);
+  }
+  if (currUnitIdx === -1 && typeof adjustment.checkpointPage === 'number') {
+    currUnitIdx = units.findIndex((u) => {
+      const pStart = typeof u.page_start === 'number' ? u.page_start : parseInt(String(u.page_start), 10);
+      const pEnd = typeof u.page_end === 'number' ? u.page_end : parseInt(String(u.page_end), 10);
+      return !isNaN(pStart) && !isNaN(pEnd) && adjustment.checkpointPage >= pStart && adjustment.checkpointPage <= pEnd;
+    });
+  }
+
   const cutSet = new Set(adjustment.cutUnitIds || []);
 
   let remaining: SyllabusUnit[] = [];
@@ -559,7 +683,8 @@ function buildAdjustedRemainingUnits(
 /**
  * Proportional pacing engine:
  * Spread unit weights proportionally across sessions.
- * Respects teacher/admin manual pacing adjustments (re-calibrations) if defined on the SyllabusScope.
+ * Respects teacher/admin manual pacing adjustments (re-calibrations) or attendance checkpoints.
+ * Excludes cancelled sessions from material allocations and pacing divisiveness.
  * Returns array of { session: ScheduledSessionOccurrence, units: SyllabusUnit[], midpage?: number }
  */
 export function computePacingProjection(
@@ -574,7 +699,9 @@ export function computePacingProjection(
     return [];
   }
 
-  if (units.length === 0) {
+  const activeSessions = sessions.filter((s) => !s.isCancelled);
+
+  if (units.length === 0 || activeSessions.length === 0) {
     return sessions.map((session) => ({
       session,
       units: [],
@@ -590,51 +717,95 @@ export function computePacingProjection(
       (s.subject_id === subject_id || (targetSubject && (s.subject_id === targetSubject.id || s.subject_id === targetSubject.code))) &&
       (s.class_section_id === class_section_id || (s as any).class_code === class_section_id || (s as any).classId === class_section_id)
   );
-  const adjustment = scope?.adjustment;
+  let adjustment = scope?.adjustment;
 
-  // Standard projection if no teacher calibration has been set
+  // If manual adjustment is not set, derive adjustment checkpoint from the latest meeting with recorded actual_page
   if (!adjustment) {
-    return runProportionalPacing(units, sessions);
+    const recordedActiveSessions = activeSessions.filter(
+      (s) => typeof s.actual_page === 'number' && s.actual_page > 0
+    );
+    if (recordedActiveSessions.length > 0) {
+      const latestRecorded = recordedActiveSessions[recordedActiveSessions.length - 1];
+      adjustment = {
+        checkpointSessionIndex: latestRecorded.meetingIndex,
+        checkpointSessionId: latestRecorded.id,
+        checkpointDate: latestRecorded.date,
+        checkpointUnitId: latestRecorded.actual_materi_id || '',
+        checkpointPage: latestRecorded.actual_page || 1,
+        strategy: 'accelerate',
+        cutUnitIds: []
+      };
+    }
   }
 
-  // Find checkpoint index in scheduled sessions
-  let checkpointIdx = sessions.findIndex(
-    (s) => s.meetingIndex === adjustment.checkpointSessionIndex
-  );
-  if (checkpointIdx === -1 && adjustment.checkpointSessionId) {
-    checkpointIdx = sessions.findIndex((s) => s.id === adjustment.checkpointSessionId);
-  }
-  if (checkpointIdx === -1 && adjustment.checkpointDate) {
-    checkpointIdx = sessions.findIndex((s) => s.date === adjustment.checkpointDate);
-  }
-  if (checkpointIdx === -1) {
-    checkpointIdx = 0;
+  let activeProjections: PacingSessionProjection[];
+
+  // Standard projection if no teacher calibration has been set or derived
+  if (!adjustment) {
+    activeProjections = runProportionalPacing(units, activeSessions);
+  } else {
+    // Find checkpoint index in active sessions
+    let checkpointIdx = activeSessions.findIndex(
+      (s) => s.meetingIndex === adjustment!.checkpointSessionIndex
+    );
+    if (checkpointIdx === -1 && adjustment.checkpointSessionId) {
+      checkpointIdx = activeSessions.findIndex((s) => s.id === adjustment!.checkpointSessionId);
+    }
+    if (checkpointIdx === -1 && adjustment.checkpointDate) {
+      checkpointIdx = activeSessions.findIndex((s) => s.date === adjustment!.checkpointDate);
+    }
+    if (checkpointIdx === -1) {
+      checkpointIdx = 0;
+    }
+
+    // If checkpoint is at the first active session
+    if (checkpointIdx === 0) {
+      const remainingUnits = buildAdjustedRemainingUnits(units, adjustment);
+      activeProjections = runProportionalPacing(remainingUnits, activeSessions).map((p, idx) => ({
+        ...p,
+        isAdjusted: true,
+        isCheckpoint: idx === 0
+      }));
+    } else {
+      // Past active sessions keep their standard pacing from the full original academic year projection
+      const fullOriginal = runProportionalPacing(units, activeSessions);
+      const pastProjections = fullOriginal.slice(0, checkpointIdx);
+
+      // Remaining active sessions from checkpoint onward take the remaining units
+      const remainingSessions = activeSessions.slice(checkpointIdx);
+      const remainingUnits = buildAdjustedRemainingUnits(units, adjustment);
+      const remainingProjections = runProportionalPacing(remainingUnits, remainingSessions).map((p, idx) => ({
+        ...p,
+        isAdjusted: true,
+        isCheckpoint: idx === 0
+      }));
+
+      activeProjections = [...pastProjections, ...remainingProjections];
+    }
   }
 
-  // If checkpoint is at the first session
-  if (checkpointIdx === 0) {
-    const remainingUnits = buildAdjustedRemainingUnits(units, adjustment);
-    return runProportionalPacing(remainingUnits, sessions).map((p, idx) => ({
-      ...p,
-      isAdjusted: true,
-      isCheckpoint: idx === 0
-    }));
-  }
+  // Recombine activeProjections with cancelled sessions in exact chronological order
+  const activeMap = new Map<string, PacingSessionProjection>();
+  activeProjections.forEach((p) => activeMap.set(p.session.id, p));
 
-  // Past sessions (0 ... checkpointIdx - 1) keep standard historical projection
-  const fullOriginal = runProportionalPacing(units, sessions);
-  const pastProjections = fullOriginal.slice(0, checkpointIdx);
-
-  // Future sessions from checkpoint onward
-  const remainingSessions = sessions.slice(checkpointIdx);
-  const remainingUnits = buildAdjustedRemainingUnits(units, adjustment);
-  const remainingProjections = runProportionalPacing(remainingUnits, remainingSessions).map((p, idx) => ({
-    ...p,
-    isAdjusted: true,
-    isCheckpoint: idx === 0
-  }));
-
-  return [...pastProjections, ...remainingProjections];
+  return sessions.map((session) => {
+    if (session.isCancelled) {
+      return {
+        session,
+        units: [],
+        startWeightProgress: 0,
+        endWeightProgress: 0
+      };
+    }
+    return (
+      activeMap.get(session.id) || {
+        session,
+        units: [],
+        startWeightProgress: 0,
+        endWeightProgress: 0
+      }
+    );
+  });
 }
 
 /**

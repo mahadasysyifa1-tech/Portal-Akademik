@@ -1,6 +1,6 @@
 {
-  "summary":  "Revised implementation plan addressing artifact comments (visual diff examples, previous record vs manual adjustments, unified teacher/student row behavior) and providing an exhaustive architectural breakdown of null vs blank vs no-row in database with full action-to-database mapping.",
-  "updatedAt":  "2026-10-20T14:04:51.846181867Z",
+  "summary":  "Normalized schema plan: add actual_materi and actual_page to attnd_meeting, index them, clean notes to plain text, deprecate syllabus_scopes.notes, and ground SyllabusView on attnd_meeting.",
+  "updatedAt":  "2026-10-22T07:22:02.533308823Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

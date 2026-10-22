@@ -68,7 +68,6 @@ async function ensureTursoSchemas() {
 
     // Idempotent migration for helper columns on attnd_meeting
     const helperColumns = [
-      'ALTER TABLE attnd_meeting ADD COLUMN active_meeting_index INTEGER',
       'ALTER TABLE attnd_meeting ADD COLUMN present_count INTEGER DEFAULT 0',
       'ALTER TABLE attnd_meeting ADD COLUMN absent_count INTEGER DEFAULT 0',
       'ALTER TABLE attnd_meeting ADD COLUMN enrolled_count INTEGER DEFAULT 0',
@@ -76,6 +75,8 @@ async function ensureTursoSchemas() {
       'ALTER TABLE attnd_meeting ADD COLUMN target_unit_id TEXT',
       'ALTER TABLE attnd_meeting ADD COLUMN target_unit_title TEXT',
       'ALTER TABLE attnd_meeting ADD COLUMN target_page_range TEXT',
+      'ALTER TABLE attnd_meeting ADD COLUMN actual_materi_id TEXT',
+      'ALTER TABLE attnd_meeting ADD COLUMN actual_page INTEGER',
     ];
 
     for (const sql of helperColumns) {
@@ -90,6 +91,7 @@ async function ensureTursoSchemas() {
     const helperIndexes = [
       'CREATE INDEX IF NOT EXISTS idx_meeting_date_session_order ON attnd_meeting(meeting_date, session_id, status)',
       'CREATE INDEX IF NOT EXISTS idx_meeting_class_subj_date ON attnd_meeting(class_id, subject_id, meeting_date, status)',
+      'CREATE INDEX IF NOT EXISTS idx_meeting_class_subj_actual_page ON attnd_meeting(class_id, subject_id, actual_page)',
       'CREATE INDEX IF NOT EXISTS idx_meeting_month_lookup ON attnd_meeting(meeting_date, status)',
       'CREATE INDEX IF NOT EXISTS idx_log_covering ON attnd_meeting_log(meeting_id, person_type, status)',
       'CREATE INDEX IF NOT EXISTS idx_enroll_class_active_covering ON attnd_enroll(class_id, active, student_id)',
@@ -101,6 +103,31 @@ async function ensureTursoSchemas() {
       } catch {
         // Ignored: index already exists
       }
+    }
+
+    // Clean up deprecated syllabus_scopes triggers
+    const cleanupTriggers = [
+      'DROP TRIGGER IF EXISTS trg_sync_scope_notes_update',
+      'DROP TRIGGER IF EXISTS trg_sync_scope_notes_insert',
+    ];
+    for (const dropSql of cleanupTriggers) {
+      try {
+        await tursoClient.execute(dropSql);
+      } catch {}
+    }
+
+    // Idempotent backfill migration: extract JSON materialProgress into actual_materi_id, actual_page, and clean notes
+    try {
+      await tursoClient.execute(`
+        UPDATE attnd_meeting
+        SET 
+          actual_materi_id = COALESCE(json_extract(notes, '$.materialProgress.unitId'), json_extract(notes, '$.materialProgress.materi')),
+          actual_page = CAST(json_extract(notes, '$.materialProgress.hal') AS INTEGER),
+          notes = json_extract(notes, '$.summary')
+        WHERE notes LIKE '{%materialProgress%'
+      `);
+    } catch (err: any) {
+      console.warn('⚠️ [Turso] actual_materi_id backfill note:', err?.message);
     }
 
     // Initial sync of helper columns and month cache
@@ -747,6 +774,7 @@ export async function getDatabaseState(forceRefresh = false): Promise<DatabaseSt
 
   let studentsRows: any[] = [];
   let enrollRows: any[] = [];
+  let meetingsRows: any[] = [];
   try {
     const stdRes = await tursoClient.execute('SELECT * FROM students ORDER BY name ASC');
     studentsRows = stdRes.rows as any[];
@@ -754,6 +782,12 @@ export async function getDatabaseState(forceRefresh = false): Promise<DatabaseSt
   try {
     const enrRes = await tursoClient.execute('SELECT * FROM attnd_enroll WHERE active = 1');
     enrollRows = enrRes.rows as any[];
+  } catch {}
+  try {
+    const mRes = await tursoClient.execute(
+      'SELECT id, meeting_date, meeting_index, class_id, subject_id, teacher_id, room_id, session_id, rule_code, status, notes, actual_materi_id, actual_page, target_unit_id, target_page_range FROM attnd_meeting ORDER BY meeting_date ASC, session_id ASC'
+    );
+    meetingsRows = mRes.rows as any[];
   } catch {}
 
   const students = studentsRows.map((s) => ({
@@ -773,7 +807,25 @@ export async function getDatabaseState(forceRefresh = false): Promise<DatabaseSt
     active: Number(e.active ?? 1),
   }));
 
-  const fullState: DatabaseState = { ...metadataData, ...kaldikData, students, enrollments };
+  const meetings = meetingsRows.map((m) => ({
+    id: String(m.id),
+    meeting_date: String(m.meeting_date),
+    meeting_index: m.meeting_index !== null ? Number(m.meeting_index) : undefined,
+    class_id: String(m.class_id),
+    subject_id: String(m.subject_id),
+    teacher_id: m.teacher_id ? String(m.teacher_id) : undefined,
+    room_id: m.room_id ? String(m.room_id) : undefined,
+    session_id: m.session_id ? String(m.session_id) : undefined,
+    rule_code: m.rule_code ? String(m.rule_code) : undefined,
+    status: (m.status as any) || 'scheduled',
+    actual_materi_id: m.actual_materi_id ? String(m.actual_materi_id) : undefined,
+    actual_page: m.actual_page !== null && m.actual_page !== undefined ? Number(m.actual_page) : undefined,
+    notes: m.notes ? String(m.notes) : undefined,
+    target_unit_id: m.target_unit_id ? String(m.target_unit_id) : undefined,
+    target_page_range: m.target_page_range ? String(m.target_page_range) : undefined,
+  }));
+
+  const fullState: DatabaseState = { ...metadataData, ...kaldikData, students, enrollments, meetings };
   cachedDatabaseState = fullState;
   cachedStateTimestamp = Date.now();
 
