@@ -59,6 +59,7 @@ export interface MeetingRollCallData {
     name: string;
     status: AttendanceStatus;
     timestampStart?: string;
+    timestampEnd?: string;
     note?: string;
   };
   students: Array<{
@@ -228,7 +229,6 @@ export async function getOrCreateDayMeetings(
       m.id,
       m.meeting_date,
       m.meeting_index,
-      COALESCE(m.active_meeting_index, m.meeting_index, 1) as active_meeting_index,
       COALESCE(m.present_count, 0) as present_count,
       COALESCE(m.absent_count, 0) as absent_count,
       COALESCE(m.enrolled_count, 0) as enrolled_count,
@@ -243,6 +243,8 @@ export async function getOrCreateDayMeetings(
       m.session_id,
       m.rule_code,
       m.status,
+      m.actual_materi_id,
+      m.actual_page,
       m.notes,
       c.name as class_name,
       c.color as class_color,
@@ -337,10 +339,46 @@ export async function getOrCreateDayMeetings(
       alpaCount: 0,
     };
 
+    let notes = m.notes || undefined;
+    let actualMateriId = m.actual_materi_id || undefined;
+    let actualPage = m.actual_page !== null && m.actual_page !== undefined ? Number(m.actual_page) : undefined;
+
+    if (notes && typeof notes === 'string' && notes.trim().startsWith('{')) {
+      try {
+        const parsed = JSON.parse(notes);
+        if (!actualMateriId) {
+          actualMateriId =
+            parsed.actual_materi_id ||
+            parsed.unitId ||
+            parsed.materiId ||
+            parsed.materialProgress?.unitId ||
+            parsed.materialProgress?.materi ||
+            parsed.materi ||
+            undefined;
+        }
+        if (actualPage === undefined) {
+          const p = parsed.actual_page ?? parsed.hal ?? parsed.page ?? parsed.materialProgress?.hal;
+          if (p !== undefined && p !== null && !isNaN(Number(p))) {
+            actualPage = Number(p);
+          }
+        }
+        notes =
+          typeof parsed.summary === 'string'
+            ? parsed.summary
+            : typeof parsed.notes === 'string'
+            ? parsed.notes
+            : typeof parsed.userNote === 'string'
+            ? parsed.userNote
+            : undefined;
+      } catch {
+        // Not JSON
+      }
+    }
+
     return {
       id: m.id,
       meetingDate: m.meeting_date,
-      meetingIndex: m.status === 'cancelled' ? undefined : (m.active_meeting_index !== null && m.active_meeting_index !== undefined ? Number(m.active_meeting_index) : (m.meeting_index ?? undefined)),
+      meetingIndex: m.meeting_index !== null && m.meeting_index !== undefined ? Number(m.meeting_index) : undefined,
       classId: m.class_id,
       className: m.class_name || m.class_id,
       classColor: m.class_color || '#E2E8F0',
@@ -358,7 +396,9 @@ export async function getOrCreateDayMeetings(
       startTime: m.start_time || '08:00',
       endTime: m.end_time || '10:00',
       status: m.status as any,
-      notes: m.notes,
+      actual_materi_id: actualMateriId,
+      actual_page: actualPage,
+      notes,
       summary: {
         totalEnrolled,
         hadirCount: stats.hadirCount,
@@ -383,7 +423,6 @@ export async function getMeetingRollCall(
     sql: `
       SELECT 
         m.*,
-        COALESCE(m.active_meeting_index, m.meeting_index, 1) as active_meeting_index,
         c.name as class_name,
         c.color as class_color,
         c.grade as class_grade,
@@ -459,11 +498,47 @@ export async function getMeetingRollCall(
     };
   });
 
+  let cleanNotes = m.notes || '';
+  let resolvedMateriId = m.actual_materi_id || undefined;
+  let resolvedPage = m.actual_page !== null && m.actual_page !== undefined ? Number(m.actual_page) : undefined;
+
+  if (typeof cleanNotes === 'string' && cleanNotes.trim().startsWith('{')) {
+    try {
+      const parsed = JSON.parse(cleanNotes);
+      if (!resolvedMateriId) {
+        resolvedMateriId =
+          parsed.actual_materi_id ||
+          parsed.unitId ||
+          parsed.materiId ||
+          parsed.materialProgress?.unitId ||
+          parsed.materialProgress?.materi ||
+          parsed.materi ||
+          undefined;
+      }
+      if (resolvedPage === undefined) {
+        const p = parsed.actual_page ?? parsed.hal ?? parsed.page ?? parsed.materialProgress?.hal;
+        if (p !== undefined && p !== null && !isNaN(Number(p))) {
+          resolvedPage = Number(p);
+        }
+      }
+      cleanNotes =
+        typeof parsed.summary === 'string'
+          ? parsed.summary
+          : typeof parsed.notes === 'string'
+          ? parsed.notes
+          : typeof parsed.userNote === 'string'
+          ? parsed.userNote
+          : '';
+    } catch {
+      // Not valid JSON
+    }
+  }
+
   return {
     meeting: {
       id: m.id,
       meetingDate: m.meeting_date,
-      meetingIndex: m.status === 'cancelled' ? undefined : (m.active_meeting_index !== null && m.active_meeting_index !== undefined ? Number(m.active_meeting_index) : (m.meeting_index ?? undefined)),
+      meetingIndex: m.meeting_index !== null && m.meeting_index !== undefined ? Number(m.meeting_index) : undefined,
       classId: m.class_id,
       className: m.class_name || m.class_id,
       classColor: m.class_color || '#E2E8F0',
@@ -481,9 +556,9 @@ export async function getMeetingRollCall(
       startTime: m.start_time || '08:00',
       endTime: m.end_time || '10:00',
       status: m.status as any,
-      actual_materi_id: m.actual_materi_id || undefined,
-      actual_page: m.actual_page !== null && m.actual_page !== undefined ? Number(m.actual_page) : undefined,
-      notes: m.notes,
+      actual_materi_id: resolvedMateriId,
+      actual_page: resolvedPage,
+      notes: cleanNotes,
       summary: {
         totalEnrolled: studentList.length,
         hadirCount: studentList.filter((s) => s.status === 'Hadir').length,
@@ -621,7 +696,6 @@ export async function getMonthMeetings(
       m.id,
       m.meeting_date,
       m.meeting_index,
-      COALESCE(m.active_meeting_index, m.meeting_index, 1) as active_meeting_index,
       COALESCE(m.present_count, 0) as present_count,
       COALESCE(m.absent_count, 0) as absent_count,
       COALESCE(m.enrolled_count, 0) as enrolled_count,
@@ -685,7 +759,7 @@ export async function getMonthMeetings(
     return {
       id: m.id,
       meetingDate: m.meeting_date,
-      meetingIndex: m.status === 'cancelled' ? undefined : (m.active_meeting_index !== null && m.active_meeting_index !== undefined ? Number(m.active_meeting_index) : (m.meeting_index ?? undefined)),
+      meetingIndex: m.meeting_index !== null && m.meeting_index !== undefined ? Number(m.meeting_index) : undefined,
       classId: m.class_id,
       className: m.class_name || m.class_id,
       classColor: m.class_color || '#E2E8F0',
@@ -725,7 +799,7 @@ export interface BatchSaveAttendancePayload {
   statusUpdates?: Array<{ meetingId: string; status: 'scheduled' | 'completed' | 'cancelled' }>;
   rollCallLogs?: Array<{
     meetingId: string;
-    teacherLog?: { id: string; status: AttendanceStatus; timestampStart?: string; note?: string };
+    teacherLog?: { id: string; status: AttendanceStatus; timestampStart?: string; timestampEnd?: string; note?: string };
     studentLogs?: Array<{ studentId: string; status: AttendanceStatus; timestampStart?: string; timestampEnd?: string; note?: string }>;
     meetingNotes?: string;
     materialProgress?: { materi?: string; hal?: number; unitId?: string };
@@ -755,8 +829,8 @@ export async function batchSaveAttendance(
     for (const item of payload.rollCallLogs) {
       const { meetingId, teacherLog, studentLogs = [], meetingNotes, materialProgress } = item;
       const loggedStudents = studentLogs.filter((s) => !!s.status);
-      const hadirCount = loggedStudents.filter((s) => s.status === 'Hadir').length;
-      const absentCount = loggedStudents.filter((s) => s.status !== 'Hadir').length;
+      const hadirCount = loggedStudents.filter((s) => s.status === 'Hadir' || s.status === 'Terlambat').length;
+      const absentCount = loggedStudents.filter((s) => s.status !== 'Hadir' && s.status !== 'Terlambat').length;
       const enrolledCount = studentLogs.length;
       const actualMateriId = materialProgress?.unitId || materialProgress?.materi || null;
       const actualPage =
@@ -764,34 +838,55 @@ export async function batchSaveAttendance(
           ? Number(materialProgress.hal)
           : null;
       const cleanNotes = meetingNotes ? meetingNotes.trim() : null;
+      const isLoggedNow = loggedStudents.length > 0 || (teacherLog && !!teacherLog.status) ? 1 : 0;
 
       statements.push({
         sql: `UPDATE attnd_meeting 
-              SET status = CASE WHEN status = 'cancelled' THEN 'cancelled' ELSE 'completed' END,
+              SET status = CASE 
+                    WHEN status = 'cancelled' THEN 'cancelled' 
+                    WHEN ? = 1 THEN 'completed' 
+                    ELSE status 
+                  END,
                   notes = ?, 
                   actual_materi_id = ?,
                   actual_page = ?,
                   present_count = ?, 
                   absent_count = ?, 
                   enrolled_count = ?, 
-                  is_logged = 1, 
+                  is_logged = ?, 
                   updated_at = CURRENT_TIMESTAMP 
               WHERE id = ?`,
-        args: [cleanNotes, actualMateriId, actualPage, hadirCount, absentCount, enrolledCount, meetingId],
+        args: [isLoggedNow, cleanNotes, actualMateriId, actualPage, hadirCount, absentCount, enrolledCount, isLoggedNow, meetingId],
       });
 
-      if (teacherLog && teacherLog.id && teacherLog.status) {
-        statements.push({
-          sql: `INSERT INTO attnd_meeting_log (
-                  meeting_id, person_type, person_id, status, timestamp_start, note, updated_at
-                ) VALUES (?, 'teacher', ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(meeting_id, person_type, person_id) DO UPDATE SET
-                  status = excluded.status,
-                  timestamp_start = excluded.timestamp_start,
-                  note = excluded.note,
-                  updated_at = CURRENT_TIMESTAMP`,
-          args: [meetingId, teacherLog.id, teacherLog.status, teacherLog.timestampStart || null, teacherLog.note || null],
-        });
+      if (teacherLog && teacherLog.id) {
+        if (teacherLog.status) {
+          statements.push({
+            sql: `INSERT INTO attnd_meeting_log (
+                    meeting_id, person_type, person_id, status, timestamp_start, timestamp_end, note, updated_at
+                  ) VALUES (?, 'teacher', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                  ON CONFLICT(meeting_id, person_type, person_id) DO UPDATE SET
+                    status = excluded.status,
+                    timestamp_start = excluded.timestamp_start,
+                    timestamp_end = excluded.timestamp_end,
+                    note = excluded.note,
+                    updated_at = CURRENT_TIMESTAMP`,
+            args: [
+              meetingId,
+              teacherLog.id,
+              teacherLog.status,
+              teacherLog.timestampStart || null,
+              teacherLog.timestampEnd || null,
+              teacherLog.note || null,
+            ],
+          });
+        } else {
+          // Teacher deselected: delete row from attnd_meeting_log
+          statements.push({
+            sql: `DELETE FROM attnd_meeting_log WHERE meeting_id = ? AND person_type = 'teacher' AND person_id = ?`,
+            args: [meetingId, teacherLog.id],
+          });
+        }
       }
       for (const s of loggedStudents) {
         statements.push({
@@ -824,14 +919,7 @@ export async function batchSaveAttendance(
 // ----------------------------------------------------------------------------
 export async function syncAttendanceOptimizationData(client: Client): Promise<void> {
   try {
-    // 1. Backfill active_meeting_index for meetings where active_meeting_index is null
-    await client.execute(`
-      UPDATE attnd_meeting
-      SET active_meeting_index = COALESCE(meeting_index, 1)
-      WHERE active_meeting_index IS NULL
-    `);
-
-    // 2. Backfill enrolled_count where enrolled_count is 0 or null
+    // 1. Backfill enrolled_count where enrolled_count is 0 or null
     await client.execute(`
       UPDATE attnd_meeting
       SET enrolled_count = COALESCE((
@@ -1346,6 +1434,7 @@ function assembleRollCall(m: any, enrolledRows: any[], logs: any[]): MeetingRoll
     name: m.teacher_name || 'Ustadz / Pengajar',
     status: (teacherLog?.status as AttendanceStatus) || null,
     timestampStart: teacherLog?.timestamp_start || null,
+    timestampEnd: teacherLog?.timestamp_end || null,
     note: teacherLog?.note || '',
   };
 
@@ -1357,9 +1446,9 @@ function assembleRollCall(m: any, enrolledRows: any[], logs: any[]): MeetingRoll
       nisn: s.nisn || '',
       gender: s.gender as 'L' | 'P',
       status: (existing?.status as AttendanceStatus) || null,
-                                       timestampStart: existing?.timestamp_start || null,
-                                       timestampEnd: existing?.timestamp_end || null,
-                                       note: existing?.note || '',
+      timestampStart: existing?.timestamp_start || null,
+      timestampEnd: existing?.timestamp_end || null,
+      note: existing?.note || '',
     };
   });
 
@@ -1367,7 +1456,7 @@ function assembleRollCall(m: any, enrolledRows: any[], logs: any[]): MeetingRoll
     meeting: {
       id: m.id,
       meetingDate: m.meeting_date,
-      meetingIndex: m.status === 'cancelled' ? undefined : (m.active_meeting_index !== null && m.active_meeting_index !== undefined ? Number(m.active_meeting_index) : (m.meeting_index ?? undefined)),
+      meetingIndex: m.meeting_index !== null && m.meeting_index !== undefined ? Number(m.meeting_index) : undefined,
       classId: m.class_id,
       className: m.class_name || m.class_id,
       classColor: m.class_color || '#E2E8F0',
@@ -1385,6 +1474,8 @@ function assembleRollCall(m: any, enrolledRows: any[], logs: any[]): MeetingRoll
       startTime: m.start_time || '08:00',
       endTime: m.end_time || '10:00',
       status: m.status as any,
+      actual_materi_id: m.actual_materi_id || undefined,
+      actual_page: m.actual_page !== null && m.actual_page !== undefined ? Number(m.actual_page) : undefined,
       notes: m.notes,
       summary: {
         totalEnrolled: studentList.length,
@@ -1410,7 +1501,6 @@ export async function getMonthRollCalls(
     sql: `
     SELECT
     m.*,
-    COALESCE(m.active_meeting_index, m.meeting_index, 1) as active_meeting_index,
                                            c.name as class_name, c.color as class_color, c.grade as class_grade, c.section as class_section,
                                            s.name as subject_name, s.color as subject_color,
                                            t.name as teacher_name, r.name as room_name,

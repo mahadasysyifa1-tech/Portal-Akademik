@@ -169,7 +169,11 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
       note: s.note,
     })),
     meetingNotes,
-    materialProgress: { materi, hal },
+    materialProgress: {
+      unitId: materi || undefined,
+      materi: materi || undefined,
+      hal: hal !== '' && hal !== undefined && !isNaN(Number(hal)) ? Number(hal) : undefined,
+    },
   });
 
   // Live auto-save draft whenever values diverge from baseline (only for admin)
@@ -257,21 +261,75 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     const initTeacherTime = rollCallData.teacher?.timestampStart || '';
     const initTeacherTimeEnd = rollCallData.teacher?.timestampEnd || '';
     const initTeacherNote = rollCallData.teacher?.note || '';
-    const initMeetingNotes = rollCallData.meeting.notes || '';
+    // Sanitize notes and extract material/page from old legacy JSON if present
+    let initMeetingNotes = rollCallData.meeting.notes || '';
+    let legacyMateri = '';
+    let legacyHal: string | number = '';
 
-    // Database reader: starts with DB values, blank if no record in DB
+    if (typeof initMeetingNotes === 'string' && initMeetingNotes.trim().startsWith('{')) {
+      try {
+        const parsed = JSON.parse(initMeetingNotes);
+        legacyMateri =
+          parsed.actual_materi_id ||
+          parsed.unitId ||
+          parsed.materiId ||
+          parsed.materialProgress?.unitId ||
+          parsed.materialProgress?.materi ||
+          parsed.materi ||
+          '';
+        const parsedHal =
+          parsed.actual_page ??
+          parsed.hal ??
+          parsed.page ??
+          parsed.materialProgress?.hal;
+        if (parsedHal !== undefined && parsedHal !== null && parsedHal !== '' && !isNaN(Number(parsedHal))) {
+          legacyHal = Number(parsedHal);
+        }
+        initMeetingNotes =
+          typeof parsed.summary === 'string'
+            ? parsed.summary
+            : typeof parsed.notes === 'string'
+            ? parsed.notes
+            : typeof parsed.userNote === 'string'
+            ? parsed.userNote
+            : '';
+      } catch {
+        // Not JSON, keep as is
+      }
+    }
+
+    // Database reader: starts with DB values, fall back to legacy JSON or target props
     let initMateri = '';
     let initHal: string | number = '';
 
-    if (rollCallData.meeting.notes && rollCallData.meeting.notes.startsWith('{')) {
-      try {
-        const parsed = JSON.parse(rollCallData.meeting.notes);
-        if (parsed.materialProgress) {
-          if (parsed.materialProgress.materi !== undefined) initMateri = parsed.materialProgress.materi;
-          if (parsed.materialProgress.hal !== undefined) initHal = parsed.materialProgress.hal;
-        }
-      } catch {}
+    const meetingAny = rollCallData.meeting as any;
+    if (meetingAny.actual_materi_id) {
+      initMateri = meetingAny.actual_materi_id;
+    } else if (legacyMateri) {
+      initMateri = legacyMateri;
     }
+
+    if (meetingAny.actual_page !== undefined && meetingAny.actual_page !== null && meetingAny.actual_page !== '') {
+      initHal = meetingAny.actual_page;
+    } else if (legacyHal !== '') {
+      initHal = legacyHal;
+    }
+
+    // Normalize: if initMateri was stored as a title or code (legacy), map to unit ID in availableUnits
+    if (initMateri && availableUnits.length > 0) {
+      const initMateriLower = String(initMateri).trim().toLowerCase();
+      const foundUnit = availableUnits.find(
+        (u) =>
+          u.id.toLowerCase() === initMateriLower ||
+          u.title.trim().toLowerCase() === initMateriLower ||
+          u.title.trim().toLowerCase().includes(initMateriLower) ||
+          initMateriLower.includes(u.title.trim().toLowerCase())
+      );
+      if (foundUnit) {
+        initMateri = foundUnit.id;
+      }
+    }
+
 
     const initStudents: AttendanceRollCallStudent[] = (rollCallData.students || []).map((s) => ({
       ...s,
@@ -343,7 +401,11 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     if (initialDraft.meetingNotes !== undefined) setMeetingNotes(initialDraft.meetingNotes);
     if (initialDraft.materialProgress) {
       const mp = initialDraft.materialProgress;
-      if (mp.materi !== undefined) setMateri(mp.materi);
+      const draftMateri = mp.unitId || mp.materi;
+      if (draftMateri !== undefined) {
+        const found = availableUnits.find((u) => u.title === draftMateri);
+        setMateri(found ? found.id : draftMateri);
+      }
       if (mp.hal !== undefined) setHal(mp.hal);
     }
   }, [loading, initialDraft, meetingId]);
@@ -359,67 +421,89 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
 
   // Schedule defaults: the same values the popover's "Default" button uses
   const getDefaultTimes = () => ({
-    start: data?.meeting.startTime || '07:00',
-    end: data?.meeting.endTime || '08:30',
+    start: data?.meeting?.startTime || '07:00',
+    end: data?.meeting?.endTime || '08:30',
   });
 
-  // Start after end is rejected. Both values fall back to the schedule defaults.
-  // HH:MM strings compare correctly as text.
+  // Start after or equal to end is rejected, and missing end time automatically falls back to schedule default end.
+  // Both values fall back to the schedule defaults whenever invalid.
   const resolveTimes = (start: string, end: string) => {
-    if (start && end && start > end) return getDefaultTimes();
-    return { start, end };
+    const defaults = getDefaultTimes();
+    const effectiveStart = start || defaults.start;
+    const effectiveEnd = end || defaults.end;
+    if (effectiveStart && effectiveEnd && effectiveStart >= effectiveEnd) {
+      return defaults;
+    }
+    return { start: effectiveStart, end: effectiveEnd };
+  };
+
+  // Shared toggle helper so individual and batch toggle behave identically
+  const toggleStudentAttendance = (
+    student: AttendanceRollCallStudent,
+    optValue: AttendanceStatus,
+    forcedNextStatus?: AttendanceStatus | null
+  ): AttendanceRollCallStudent => {
+    const nextStatus =
+      forcedNextStatus !== undefined
+        ? forcedNextStatus
+        : student.status === optValue
+        ? null
+        : optValue;
+
+    if (!nextStatus || nextStatus === 'Izin' || nextStatus === 'Alpa') {
+      return { ...student, status: nextStatus, timestampStart: '', timestampEnd: '' };
+    }
+
+    if (nextStatus === 'Hadir' || nextStatus === 'Terlambat') {
+      const nowTime = getNowFormattedTime();
+      const defaults = getDefaultTimes();
+      // Ensure end time is ALWAYS recorded and respects invalid time rules
+      const r = resolveTimes(student.timestampStart || nowTime, student.timestampEnd || defaults.end);
+      if (!student.timestampStart) triggerFlash(student.studentId);
+      return { ...student, status: nextStatus, timestampStart: r.start, timestampEnd: r.end };
+    }
+
+    return { ...student, status: nextStatus };
   };
 
   const handleToggleStatus = (target: 'teacher' | string, optValue: AttendanceStatus) => {
     if (!isAdmin) return;
     const nowTime = getNowFormattedTime();
-    const meetingEndTime = data?.meeting?.endTime || '';
+    const defaults = getDefaultTimes();
 
     if (target === 'teacher') {
       const nextStatus = teacherStatus === optValue ? null : optValue;
       setTeacherStatus(nextStatus);
 
-      if (nextStatus === 'Izin' || nextStatus === 'Alpa') {
+      if (!nextStatus || nextStatus === 'Izin' || nextStatus === 'Alpa') {
         setTeacherTime('');
         setTeacherTimeEnd('');
       } else if (nextStatus === 'Hadir' || nextStatus === 'Terlambat') {
-        const r = resolveTimes(teacherTime || nowTime, teacherTimeEnd || meetingEndTime);
+        const r = resolveTimes(teacherTime || nowTime, teacherTimeEnd || defaults.end);
         setTeacherTime(r.start);
         setTeacherTimeEnd(r.end);
         if (!teacherTime) triggerFlash('teacher');
       }
     } else {
       setStudents((prev) =>
-      prev.map((s) => {
-        if (s.studentId !== target) return s;
-        const nextStatus = s.status === optValue ? null : optValue;
-
-        if (nextStatus === 'Izin' || nextStatus === 'Alpa') {
-          return { ...s, status: nextStatus, timestampStart: '', timestampEnd: '' };
-        }
-
-        if (nextStatus === 'Hadir' || nextStatus === 'Terlambat') {
-          const r = resolveTimes(s.timestampStart || nowTime, s.timestampEnd || meetingEndTime);
-          if (!s.timestampStart) triggerFlash(s.studentId);
-          return { ...s, status: nextStatus, timestampStart: r.start, timestampEnd: r.end };
-        }
-
-        return { ...s, status: nextStatus };
-      })
+        prev.map((s) => (s.studentId === target ? toggleStudentAttendance(s, optValue) : s))
       );
     }
   };
 
   const markAllStudents = (status: AttendanceStatus) => {
     if (!isAdmin) return;
-    const nowTime = getNowFormattedTime();
+    // Batch toggle behaves identically to individual toggle:
+    // If all students are already this status, toggle all to null (cancel/reset).
+    // Otherwise, mark all students with this status and record valid start and end times.
+    const allAlreadyThisStatus = students.length > 0 && students.every((s) => s.status === status);
+    const targetStatus = allAlreadyThisStatus ? null : status;
+
     setStudents((prev) =>
-    prev.map((s) => {
-      const r = resolveTimes(s.timestampStart || nowTime, s.timestampEnd);
-      return { ...s, status, timestampStart: r.start, timestampEnd: r.end };
-    })
+      prev.map((s) => toggleStudentAttendance(s, status, targetStatus))
     );
   };
+
 
   const handleDiscardDraft = () => {
     const base = baselineSnapshotRef.current;
@@ -481,6 +565,16 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     const num = parseInt(clean, 10);
     if (isNaN(num)) return;
 
+    // If material is not yet selected, auto-select unit matching this page
+    if (!materi && availableUnits.length > 0) {
+      const uMatch = availableUnits.find((u) => {
+        const s = Number(u.page_start ?? (u as any).pageStart);
+        const e = Number(u.page_end ?? (u as any).pageEnd);
+        return !isNaN(s) && !isNaN(e) && num >= Math.min(s, e) && num <= Math.max(s, e);
+      });
+      if (uMatch) setMateri(uMatch.id);
+    }
+
     // Only allow values within the selected material range
     if (rangeMax !== undefined && num > rangeMax) {
       setHal(rangeMax);
@@ -507,26 +601,62 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     if (!isAdmin) return;
     const currentNum = parseInt(String(hal), 10);
     if (isNaN(currentNum)) {
-      setHal(rangeMin !== undefined ? rangeMin : 1);
+      const target = rangeMin !== undefined ? rangeMin : 1;
+      setHal(target);
+      if (!materi && availableUnits.length > 0) {
+        const uMatch = availableUnits.find((u) => {
+          const s = Number(u.page_start ?? (u as any).pageStart);
+          const e = Number(u.page_end ?? (u as any).pageEnd);
+          return !isNaN(s) && !isNaN(e) && target >= Math.min(s, e) && target <= Math.max(s, e);
+        });
+        if (uMatch) setMateri(uMatch.id);
+      }
       return;
     }
     if (rangeMax !== undefined && currentNum >= rangeMax) {
       return;
     }
-    setHal(currentNum + 1);
+    const nextNum = currentNum + 1;
+    setHal(nextNum);
+    if (!materi && availableUnits.length > 0) {
+      const uMatch = availableUnits.find((u) => {
+        const s = Number(u.page_start ?? (u as any).pageStart);
+        const e = Number(u.page_end ?? (u as any).pageEnd);
+        return !isNaN(s) && !isNaN(e) && nextNum >= Math.min(s, e) && nextNum <= Math.max(s, e);
+      });
+      if (uMatch) setMateri(uMatch.id);
+    }
   };
 
   const handlePageDown = () => {
     if (!isAdmin) return;
     const currentNum = parseInt(String(hal), 10);
     if (isNaN(currentNum)) {
-      setHal(rangeMin !== undefined ? rangeMin : 1);
+      const target = rangeMin !== undefined ? rangeMin : 1;
+      setHal(target);
+      if (!materi && availableUnits.length > 0) {
+        const uMatch = availableUnits.find((u) => {
+          const s = Number(u.page_start ?? (u as any).pageStart);
+          const e = Number(u.page_end ?? (u as any).pageEnd);
+          return !isNaN(s) && !isNaN(e) && target >= Math.min(s, e) && target <= Math.max(s, e);
+        });
+        if (uMatch) setMateri(uMatch.id);
+      }
       return;
     }
     if (rangeMin !== undefined && currentNum <= rangeMin) {
       return;
     }
-    setHal(currentNum - 1);
+    const nextNum = currentNum - 1;
+    setHal(nextNum);
+    if (!materi && availableUnits.length > 0) {
+      const uMatch = availableUnits.find((u) => {
+        const s = Number(u.page_start ?? (u as any).pageStart);
+        const e = Number(u.page_end ?? (u as any).pageEnd);
+        return !isNaN(s) && !isNaN(e) && nextNum >= Math.min(s, e) && nextNum <= Math.max(s, e);
+      });
+      if (uMatch) setMateri(uMatch.id);
+    }
   };
 
   const currentHalNum = parseInt(String(hal), 10);
@@ -754,19 +884,18 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                     onChange={(e) => {
                       const unit = availableUnits.find((u) => u.id === e.target.value);
                       if (unit) {
-                        setMateri(unit.title);
+                        setMateri(unit.id);
                         const startP = unit.page_start ?? (unit as any).pageStart;
                         if (startP !== undefined && startP !== null && startP !== '') {
                           setHal(startP);
                         }
                       } else {
                         setMateri('');
-                        setHal('');
                       }
                     }}
                     className="flex-1 min-w-0 bg-transparent font-medium text-slate-800 focus:outline-none text-xs cursor-pointer truncate"
                   >
-                    <option value="">{materi ? materi : 'Pilih materi...'}</option>
+                    <option value="">{!matchedUnit && materi ? materi : 'Pilih materi...'}</option>
                     {availableUnits.map((u) => (
                       <option key={u.id} value={u.id}>
                         {u.title}
@@ -828,10 +957,13 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                       <button
                         type="button"
                         onClick={() => {
-                          const defMateri = targetMateri || availableUnits[0]?.title || '';
-                          const unit = availableUnits.find((u) => u.title === defMateri) || availableUnits[0];
-                          const fallbackPage = unit
-                            ? (unit.page_start ?? (unit as any).pageStart ?? unit.page_end ?? (unit as any).pageEnd ?? '')
+                          const targetUnit =
+                            (targetUnitId && availableUnits.find((u) => u.id === targetUnitId)) ||
+                            (targetMateri && availableUnits.find((u) => u.title === targetMateri || u.id === targetMateri)) ||
+                            availableUnits[0];
+                          const defMateri = targetUnit ? targetUnit.id : (targetUnitId || targetMateri || '');
+                          const fallbackPage = targetUnit
+                            ? (targetUnit.page_start ?? (targetUnit as any).pageStart ?? targetUnit.page_end ?? (targetUnit as any).pageEnd ?? '')
                             : '';
                           const defHal =
                             targetHal !== undefined && targetHal !== null && targetHal !== ''
@@ -960,11 +1092,23 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                     <button
                       type="button"
                       onClick={() => markAllStudents('Hadir')}
-                      className="flex items-center gap-1 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 rounded-xl text-xs font-bold transition-colors cursor-pointer shrink-0"
-                      title="Tandai semua santri hadir"
+                      className={`flex items-center gap-1 px-3 py-1.5 border rounded-xl text-xs font-bold transition-colors cursor-pointer shrink-0 ${
+                        students.length > 0 && students.every((s) => s.status === 'Hadir')
+                          ? 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-700'
+                          : 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-700'
+                      }`}
+                      title={
+                        students.length > 0 && students.every((s) => s.status === 'Hadir')
+                          ? 'Batalkan status hadir untuk semua santri'
+                          : 'Tandai semua santri hadir'
+                      }
                     >
                       <UserCheck className="w-3.5 h-3.5" />
-                      <span>Semua Hadir</span>
+                      <span>
+                        {students.length > 0 && students.every((s) => s.status === 'Hadir')
+                          ? 'Reset Hadir'
+                          : 'Semua Hadir'}
+                      </span>
                     </button>
                   )}
                 </div>

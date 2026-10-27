@@ -8,7 +8,7 @@ export interface PendingStatusUpdate {
 
 export interface PendingRollCallLog {
   meetingId: string;
-  teacherLog?: { id: string; status: AttendanceStatus; timestampStart?: string; note?: string };
+  teacherLog?: { id: string; status: AttendanceStatus; timestampStart?: string; timestampEnd?: string; note?: string };
   studentLogs?: Array<{
     studentId: string;
     status: AttendanceStatus;
@@ -64,12 +64,31 @@ export function useAttendancePendingStore(): AttendancePendingStore {
         next.set(meetingId, { meetingId, ...payload });
         return next;
       });
-      // Also mark status as completed in statusDrafts
-      setStatusDrafts((prev) => {
-        const next = new Map(prev);
-        next.set(meetingId, 'completed');
-        return next;
-      });
+
+      // Meeting status is ONLY touched if attendance was actually logged.
+      // Editing material, page, or notes must NEVER mark a meeting as completed.
+      const hasAttendance =
+        Boolean(payload.teacherLog?.status) ||
+        Boolean(payload.studentLogs && payload.studentLogs.some((s) => Boolean(s.status)));
+
+      if (hasAttendance) {
+        setStatusDrafts((prev) => {
+          const next = new Map(prev);
+          next.set(meetingId, 'completed');
+          return next;
+        });
+      } else {
+        // If no attendance was logged or all attendance was reset to null,
+        // do not mark as completed. If a previous draft set it to completed, clear it.
+        setStatusDrafts((prev) => {
+          if (prev.get(meetingId) === 'completed') {
+            const next = new Map(prev);
+            next.delete(meetingId);
+            return next;
+          }
+          return prev;
+        });
+      }
     },
     []
   );

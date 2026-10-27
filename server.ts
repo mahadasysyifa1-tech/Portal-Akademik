@@ -35,12 +35,25 @@ const app = express();
 const PORT = 3000;
 app.use(express.json({ limit: '10mb' }));
 
-// Seed & verify database on startup
-ensureDataSeeded().catch((err) => {
-  console.error('Database initialization error:', err);
-});
+// Track DB readiness as a promise and gate API requests until ready
+let dbReady = false;
+let dbInitError: Error | null = null;
 
-// Health Check
+const dbReadinessPromise = (async () => {
+  try {
+    console.log('[Database] Initializing Turso LibSQL connection and verifying seed data...');
+    await ensureDataSeeded();
+    dbReady = true;
+    console.log('[Database] Turso LibSQL database ready and seeded.');
+    return true;
+  } catch (err: any) {
+    dbInitError = err;
+    console.error('[Database] Initialization error:', err);
+    throw err;
+  }
+})();
+
+// Health Check - always answers immediately regardless of DB state
 app.get('/api/health', (req, res) => {
   const isConfigured = Boolean(
     (process.env.TURSO_METADATA_URL || process.env.TURSO_DATABASE_URL) &&
@@ -53,8 +66,38 @@ app.get('/api/health', (req, res) => {
     tursoConfigured: isConfigured,
     tursoMetadataConfigured: isConfigured,
     database: 'ijma-metadata (unified)',
+    dbReady,
+    dbError: dbInitError ? dbInitError.message : null,
   });
 });
+
+// Database gate middleware: blocks API requests until Turso database connection succeeds
+async function requireDatabaseReady(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (dbReady) {
+    return next();
+  }
+  try {
+    // Wait for the database seeding to complete with a 20s safeguard timeout
+    await Promise.race([
+      dbReadinessPromise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Database connection timed out while waiting for initialization')), 20000)
+      ),
+    ]);
+    next();
+  } catch (err: any) {
+    console.error(`[Database Gate] Request to ${req.originalUrl || req.path} delayed/failed - DB not ready:`, err?.message);
+    if (!res.headersSent) {
+      res.status(503).json({
+        error: 'Database is still initializing or currently unavailable. Please retry in a moment.',
+        details: err?.message,
+      });
+    }
+  }
+}
+
+// Gate all DB and attendance endpoints until Turso connection succeeds
+app.use(['/api/database', '/api/attendance', '/api/enrollment'], requireDatabaseReady);
 
 // Primary data endpoints for Portal Akademik (Turso Cloud SQL + SQLite fallback)
 app.get('/api/database', async (req, res) => {
@@ -385,44 +428,75 @@ app.get('/api/database/schema/kaldik', (req, res) => {
   res.type('text/plain').send(KALDIK_SCHEMA_SQL);
 });
 
-async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: {
-        middlewareMode: true,
-        hmr: process.env.DISABLE_HMR !== 'true',
-        watch: process.env.DISABLE_HMR === 'true' ? null : {},
-      },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
-  }
+// Set up Vite dev server middleware or production static serving
+let viteMiddleware: any = null;
+let viteInitPromise: Promise<any> | null = null;
 
-  const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`School Schedule Server (SQLite WAL) running on http://localhost:${PORT}`);
+if (process.env.NODE_ENV !== 'production') {
+  viteInitPromise = createViteServer({
+    server: {
+      middlewareMode: true,
+      hmr: process.env.DISABLE_HMR !== 'true',
+      watch: process.env.DISABLE_HMR === 'true' ? null : {},
+    },
+    appType: 'spa',
+  }).then((vite) => {
+    viteMiddleware = vite.middlewares;
+    console.log('[Vite] Dev server middleware initialized');
+    return vite;
+  }).catch((err) => {
+    console.error('[Vite] Dev server initialization error:', err);
   });
 
-  server.on('error', (err: any) => {
-    console.error('HTTP Server error:', err);
+  app.use(async (req, res, next) => {
+    if (viteMiddleware) {
+      return viteMiddleware(req, res, next);
+    }
+    if (viteInitPromise) {
+      try {
+        const vite = await viteInitPromise;
+        if (vite?.middlewares) {
+          return vite.middlewares(req, res, next);
+        }
+      } catch (err) {
+        return next(err);
+      }
+    }
+    next();
   });
-
-  const handleShutdown = () => {
-    server.close(() => {
-      process.exit(0);
-    });
-  };
-
-  process.on('SIGTERM', handleShutdown);
-  process.on('SIGINT', handleShutdown);
+} else {
+  const distPath = path.join(process.cwd(), 'dist');
+  app.use(express.static(distPath));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
 }
 
-startServer().catch((err) => {
-  console.error('Fatal server start error:', err);
-  process.exit(1);
+// Bind HTTP server IMMEDIATELY so Nginx reverse proxy finds port 3000 open in < 20ms
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[HTTP Server] Listening on http://0.0.0.0:${PORT} (Immediate port bind)`);
 });
+
+server.on('error', (err: any) => {
+  console.error('[HTTP Server] Server error:', err);
+});
+
+// Process-level error traps so transient errors do not crash dev server
+process.on('uncaughtException', (err) => {
+  console.error('[Process] Uncaught exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Process] Unhandled rejection at:', promise, 'reason:', reason);
+});
+
+const handleShutdown = () => {
+  console.log('[Process] Shutting down gracefully...');
+  server.close(() => {
+    process.exit(0);
+  });
+};
+
+process.on('SIGTERM', handleShutdown);
+process.on('SIGINT', handleShutdown);
+

@@ -1,63 +1,107 @@
-# Normalized Schema & Single Source of Truth: `attnd_meeting`
+# SyllabusTimeline Inspection, Action Deprecation & Pacing Indicator
 
-Normalize the Turso (LibSQL) database schema by adding dedicated `actual_materi` and `actual_page` columns to `attnd_meeting`, index them, restore `attnd_meeting.notes` to clean plain-text journal notes (no JSON blobs), deprecate `syllabus_scopes.notes` completely, and ground `SyllabusView` directly on `attnd_meeting`.
+Streamline `SyllabusTimeline.tsx` into a focused, pure read-only progress tracking view by deprecating administrative action buttons, transforming calibration highlights into a minimal icon next to "Materi Target", and introducing a clear header summary comparing actual recorded page progress against target page expectations.
 
----
+## User Review & Critical Decisions
 
-### Key Architectural Decisions
-
-1. **Schema Normalization in `attnd_meeting`**:
-   - `actual_materi TEXT`: Material title or topic taught in the session.
-   - `actual_page INTEGER`: Page number reached in the book.
-   - `notes TEXT`: Clean, human-readable teacher journal text (no stringified JSON).
-   - Index: `CREATE INDEX IF NOT EXISTS idx_meeting_class_subj_progress ON attnd_meeting(class_id, subject_id, actual_page);`
-   - Automated backfill: Extract existing JSON blobs in `notes` using SQLite's native `json_extract` to populate `actual_materi` and `actual_page`, cleaning `notes` to plain summary text.
-2. **Deprecation of `syllabus_scopes.notes`**:
-   - Drop the copy triggers (`trg_sync_scope_notes_update`, `trg_sync_scope_notes_insert`).
-   - Remove `notes` from `syllabus_scopes` save/read workflows.
-   - `attnd_meeting` becomes the single authoritative source of truth for all sessions, progress markers, and meeting notes.
-3. **SyllabusView & Pacing Migration**:
-   - `pacingEngine.ts` generates session occurrences from `attnd_meeting` rows for that `(subject_id, class_id)`.
-   - Cancelled sessions are rendered with a *"Sesi Dibatalkan"* badge and excluded from pacing count and unit allocation.
-   - The timeline calibration point is derived directly from the latest meeting with `actual_page`.
+> [!IMPORTANT]
+> The following decisions were confirmed by the user:
+> - **Pacing Indicator Placement**: Only as a summary indicator in the header card (not cluttered across individual session cards).
+> - **Pacing Metric Calculation**: Difference in pages between the most recent recorded actual page and the expected target page (`actualPage - targetPage`).
+> - **Action Deprecation**: Retain breadcrumb navigation (`Pelajaran / [Subject] / [Class]`), while completely deprecating and removing all admin action buttons (`Kalibrasi Laju`, `Ubah Rentang Silabus`, admin login triggers, and in-card external link buttons).
+> - **Calibration Indicator Style**: Replace bulky "Terkalibrasi" badges with a minimal, unhighlighted icon (e.g. `SlidersHorizontal` with tooltip) placed quietly right next to the "Materi Target:" label.
 
 ---
 
-### Implementation Steps
+## 1. Overview & Core Concept
 
-#### Step 1: Database Migration (`server/db/schemas.ts` & `server/db/index.ts`)
-- In `ensureTursoSchemas()`:
-  - Add `ALTER TABLE attnd_meeting ADD COLUMN actual_materi TEXT;`
-  - Add `ALTER TABLE attnd_meeting ADD COLUMN actual_page INTEGER;`
-  - Add `CREATE INDEX IF NOT EXISTS idx_meeting_class_subj_progress ON attnd_meeting(class_id, subject_id, actual_page);`
-  - Execute backfill SQL to migrate existing JSON notes into `actual_materi`, `actual_page`, and clean `notes`.
-  - Drop triggers `trg_sync_scope_notes_update` and `trg_sync_scope_notes_insert`.
-- In `getDatabaseState()`:
-  - Query `attnd_meeting` and include lightweight `meetings: MeetingRecord[]` in `DatabaseState`.
-  - Remove subqueries on `syllabus_scopes`.
-
-#### Step 2: Roll Call Save Normalization (`server/db/attendance.ts`)
-- In `saveMeetingRollCall`:
-  - Write `actual_materi` and `actual_page` as discrete SQL parameters.
-  - Write `notes = meetingNotes || null` as clean plain text.
-  - Remove any writes or references to `syllabus_scopes.notes`.
-- In `getMeetingRollCall` & `getMonthMeetings`:
-  - Return `actual_materi` and `actual_page` directly.
-
-#### Step 3: Pacing Engine & SyllabusView (`src/utils/pacingEngine.ts` & `SyllabusTimeline.tsx`)
-- In `pacingEngine.ts`:
-  - Build sessions from `db.meetings` for that subject and class.
-  - Exclude cancelled meetings from pacing division and unit distribution.
-  - Calibrate timeline to the latest meeting's `actual_page`.
-- In `SyllabusTimeline.tsx`:
-  - Render cancelled sessions with a distinct *"Sesi Dibatalkan"* badge.
-  - Display the latest meeting's plain text note in the header card if present.
+- **What It Does**: Presents a clear, clean, and distraction-free timeline of syllabus pacing. Teachers, students, and administrators can immediately see the schedule and verify whether classroom delivery is ahead, behind, or on track without encountering administrative configuration buttons or overwhelming badges.
+- **Target Audience**: Teachers and academic coordinators reviewing class progress against the syllabus.
+- **Key Value**: Instant clarity on class pacing with minimal visual noise and zero lingering deprecated actions.
 
 ---
 
-### Verification Plan
+## 2. User Experience & Visual Design
 
-1. **Schema Check**: Confirm `actual_materi` and `actual_page` exist in `attnd_meeting` via PRAGMA.
-2. **Backfill Verification**: Confirm existing meetings have populated `actual_materi` and `actual_page` without JSON in `notes`.
-3. **Save Verification**: Save roll call in `AttendanceModal` and confirm discrete columns are stored in Turso.
-4. **Timeline & Cancellation**: Confirm `SyllabusTimeline` displays actual meetings, marks cancelled sessions, and excludes them from pace calculations.
+### Pacing Summary Indicator in Header
+Located in the sticky top header card, beside the existing session/chapter counts:
+- **Ahead of Schedule (`diff > 0`)**: Emerald accent (`+X Hal Lebih Cepat`).
+- **Behind Schedule (`diff < 0`)**: Rose / Amber accent (`-X Hal Tertinggal`).
+- **On Track (`diff === 0`)**: Slate / Emerald subtle accent (`Tepat Target`).
+- **No Progress Recorded Yet**: Muted neutral state (`Belum Ada Catatan Progres`).
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ ← Pelajaran / Bahasa Arab / Kelas 7A                                        │
+│                                                                             │
+│ Total: 24 Pertemuan • Cakupan: 6 Bab • Total Halaman: 120 Hal               │
+│ Target: ±5 Hal / Sesi   [ +4 Hal (Lebih Cepat) • Sesi #5 ]                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Minimal Calibration Indicator
+- Remove prominent "Terkalibrasi" amber badges and commented checkpoint banners.
+- When `isAdjusted` is true for a given session, render a clean, understated icon:
+  `Materi Target: <SlidersHorizontal className="w-3 h-3 text-slate-400 inline-block ml-1" title="Laju disesuaikan dari kalibrasi guru" />`
+- Keeps the session card typography clean and uncluttered according to anti-slop guidelines.
+
+### Deprecating Actions
+- Remove:
+  1. Top header "Kalibrasi Laju" button (`onNavigateToSyllabusScope`).
+  2. Top header "Ubah Rentang Silabus" button (`onNavigateToRuleManager`).
+  3. Top header "Masuk admin untuk kalibrasi laju" button (`onOpenAdminLogin`).
+  4. Top header "Telah Disesuaikan Guru" pill badge.
+  5. In-card current session external link button (`onNavigateToSyllabusScope`).
+- Retain:
+  1. Breadcrumb navigation buttons to navigate back to Subjects or Classes.
+
+---
+
+## 3. Key Product Decisions & Trade-Offs
+
+- **Decision 1: Header-Only Pacing Summary**
+  - *Chosen Approach*: Compute pacing variance once based on the latest recorded meeting (`actual_page`) against its corresponding session target `page_end`.
+  - *Why*: Prevents repetitive badge clutter on every past session card while giving immediate status at a glance.
+  - *Alternatives Considered*: Showing badge on every row was rejected to avoid visual redundancy.
+
+- **Decision 2: Quiet Icon Beside "Materi Target"**
+  - *Chosen Approach*: Inline 12px neutral icon (`SlidersHorizontal`) with tooltip.
+  - *Why*: Fulfills the explicit user requirement ("Kalibrasi indicator should only be minimal not highlighted, just make a tiny icon illustrating adjusted next to 'Materi Target'").
+
+- **Decision 3: Complete Removal of Admin Action Triggers**
+  - *Chosen Approach*: Strip out unused callbacks and buttons in `SyllabusTimeline.tsx`. Keep parent props clean.
+  - *Why*: Eliminates accidental navigation from the review timeline and enforces single-responsibility for this screen.
+
+---
+
+## 4. Technical Architecture & Implementation Steps
+
+```
+SyllabusTimeline.tsx
+├── Breadcrumb Navigation (Active, retains onBackToSubjects / onBackToClasses)
+├── Header Summary
+│   ├── Total Sessions, Scoped Chapters, Total Pages
+│   ├── Target Pages / Session
+│   └── [NEW] Pacing Status Badge (+X Hal Lebih Cepat / -X Hal Tertinggal / Tepat Target)
+└── Timeline Session Cards
+    ├── Meeting # and Timing Details (Clean metadata, no admin external link)
+    └── Material Column
+        ├── Label: "Materi Target:" [NEW: + Tiny SlidersHorizontal Icon if isAdjusted]
+        └── Unit List (Read-only, clean book metadata & page span)
+```
+
+### Implementation Checklist
+1. **Calculate Pacing Difference in `SyllabusTimeline.tsx`**:
+   - Find latest session in `pacingData.projection` where `session.actual_page && session.actual_page > 0`.
+   - Compare `session.actual_page` with target end page (`item.units[item.units.length - 1]?.page_end`).
+   - Derive difference: `diff = actualPage - targetEndPage`.
+   - Render pacing pill in the header metadata row.
+2. **Remove Deprecated Actions**:
+   - Remove header action buttons container (lines 137–192).
+   - Remove card-level external link button (lines 415–432).
+   - Clean up unused imports (`CheckCircle2` if only used in deprecated badges, etc.).
+3. **Minimize Calibration Indicator**:
+   - Remove the `Terkalibrasi` pill badge from lines 395–403.
+   - Insert `<SlidersHorizontal className="w-3 h-3 text-slate-400 inline ml-1" />` next to `"Materi Target:"` when `isAdjusted` is true.
+4. **Compile & Lint Check**:
+   - Run `compile_applet` and `lint_applet` to verify clean build without broken props or unused variables.

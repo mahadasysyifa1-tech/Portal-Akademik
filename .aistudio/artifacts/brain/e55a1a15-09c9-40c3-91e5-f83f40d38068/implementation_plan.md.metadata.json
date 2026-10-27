@@ -1,6 +1,6 @@
 {
-  "summary":  "Normalized schema plan: add actual_materi and actual_page to attnd_meeting, index them, clean notes to plain text, deprecate syllabus_scopes.notes, and ground SyllabusView on attnd_meeting.",
-  "updatedAt":  "2026-10-22T07:22:02.533308823Z",
+  "summary":  "Plan to inspect and update SyllabusTimeline.tsx by removing deprecated admin action buttons, minimalizing calibration indicators with a subtle icon beside 'Materi Target', and adding a page-difference pacing summary in the header to clearly show whether progress is ahead, behind, or on track.",
+  "updatedAt":  "2026-10-27T09:46:16.438483590Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

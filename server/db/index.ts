@@ -116,15 +116,44 @@ async function ensureTursoSchemas() {
       } catch {}
     }
 
-    // Idempotent backfill migration: extract JSON materialProgress into actual_materi_id, actual_page, and clean notes
+    // Idempotent migration: deprecate old JSON notes system and backfill missing actual_materi_id from materials & scopes
     try {
+      // 1. Extract JSON materialProgress into dedicated columns and sanitize notes
       await tursoClient.execute(`
         UPDATE attnd_meeting
         SET 
-          actual_materi_id = COALESCE(json_extract(notes, '$.materialProgress.unitId'), json_extract(notes, '$.materialProgress.materi')),
-          actual_page = CAST(json_extract(notes, '$.materialProgress.hal') AS INTEGER),
-          notes = json_extract(notes, '$.summary')
+          actual_materi_id = COALESCE(actual_materi_id, json_extract(notes, '$.materialProgress.unitId'), json_extract(notes, '$.materialProgress.materi')),
+          actual_page = COALESCE(actual_page, CAST(json_extract(notes, '$.materialProgress.hal') AS INTEGER)),
+          notes = CASE 
+            WHEN json_extract(notes, '$.summary') IS NOT NULL AND json_extract(notes, '$.summary') != '' THEN json_extract(notes, '$.summary')
+            ELSE NULL 
+          END
         WHERE notes LIKE '{%materialProgress%'
+      `);
+
+      // 2. Deprecate old JSON notes system: ensure no raw JSON remains in notes
+      await tursoClient.execute(`
+        UPDATE attnd_meeting
+        SET notes = NULL
+        WHERE notes LIKE '{%' AND (notes LIKE '%"materialProgress"%' OR notes LIKE '%"studentLogs"%')
+      `);
+
+      // 3. For any meetings with actual_page but missing actual_materi_id, automatically resolve to matching material
+      await tursoClient.execute(`
+        UPDATE attnd_meeting
+        SET actual_materi_id = (
+          SELECT mat.code
+          FROM materials mat
+          JOIN syllabus_scope_books ssb ON ssb.book_code = mat.book_code
+          JOIN syllabus_scopes sc ON sc.code = ssb.scope_code
+          WHERE sc.subject_code = attnd_meeting.subject_id
+            AND sc.class_code = attnd_meeting.class_id
+            AND mat.page_start <= attnd_meeting.actual_page
+            AND mat.page_end >= attnd_meeting.actual_page
+          ORDER BY mat.order_num ASC
+          LIMIT 1
+        )
+        WHERE actual_materi_id IS NULL AND actual_page IS NOT NULL AND actual_page > 0
       `);
     } catch (err: any) {
       console.warn('⚠️ [Turso] actual_materi_id backfill note:', err?.message);

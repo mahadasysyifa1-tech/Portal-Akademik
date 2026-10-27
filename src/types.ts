@@ -296,7 +296,6 @@ export interface MeetingRecord {
   id: string;
   meeting_date: string;
   meeting_index?: number;
-  active_meeting_index?: number;
   class_id: string;
   subject_id: string;
   teacher_id?: string;
@@ -451,7 +450,6 @@ export interface AttendanceMeetingSummary {
   id: string;
   meetingDate: string;
   meetingIndex?: number;
-  activeMeetingIndex?: number;
   classId: string;
   className: string;
   classColor?: string;
@@ -469,6 +467,8 @@ export interface AttendanceMeetingSummary {
   startTime: string;
   endTime: string;
   status: 'scheduled' | 'completed' | 'cancelled';
+  actual_materi_id?: string;
+  actual_page?: number;
   notes?: string;
   summary: {
     totalEnrolled: number;

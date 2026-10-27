@@ -530,7 +530,6 @@ export function normalizeDatabaseState(raw: any): DatabaseState {
         id: String(m.id),
         meeting_date: String(m.meeting_date || m.meetingDate || ''),
         meeting_index: typeof m.meeting_index === 'number' ? m.meeting_index : typeof m.meetingIndex === 'number' ? m.meetingIndex : undefined,
-        active_meeting_index: typeof m.active_meeting_index === 'number' ? m.active_meeting_index : typeof m.activeMeetingIndex === 'number' ? m.activeMeetingIndex : undefined,
         class_id: String(m.class_id || m.classId || ''),
         subject_id: String(m.subject_id || m.subjectId || ''),
         teacher_id: m.teacher_id || m.teacherId || undefined,

@@ -726,11 +726,20 @@ export function computePacingProjection(
     );
     if (recordedActiveSessions.length > 0) {
       const latestRecorded = recordedActiveSessions[recordedActiveSessions.length - 1];
+      let resolvedUnitId = latestRecorded.actual_materi_id || '';
+      if (!resolvedUnitId && typeof latestRecorded.actual_page === 'number') {
+        const matched = units.find((u) => {
+          const s = typeof u.page_start === 'number' ? u.page_start : parseInt(String(u.page_start), 10);
+          const e = typeof u.page_end === 'number' ? u.page_end : parseInt(String(u.page_end), 10);
+          return !isNaN(s) && !isNaN(e) && latestRecorded.actual_page! >= Math.min(s, e) && latestRecorded.actual_page! <= Math.max(s, e);
+        });
+        if (matched) resolvedUnitId = matched.id;
+      }
       adjustment = {
         checkpointSessionIndex: latestRecorded.meetingIndex,
         checkpointSessionId: latestRecorded.id,
         checkpointDate: latestRecorded.date,
-        checkpointUnitId: latestRecorded.actual_materi_id || '',
+        checkpointUnitId: resolvedUnitId,
         checkpointPage: latestRecorded.actual_page || 1,
         strategy: 'accelerate',
         cutUnitIds: []
