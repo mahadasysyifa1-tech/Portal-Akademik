@@ -1020,7 +1020,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                       <div className="flex items-center gap-2 min-w-0">
                         <div className="min-w-0">
                           <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                            Ustadz / Pengajar
+                            Pengajar:
                           </div>
                           <div className="text-xs font-bold text-slate-800 truncate">
                             {data?.teacher.name || 'Pengampu'}
@@ -1030,43 +1030,45 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
 
                       <div className="flex items-center gap-1.5 shrink-0">
                         {/* Minimal Time Chip */}
-                        {isAdmin && (teacherTime || teacherTimeEnd) && (
+                        <div className="flex item-center gap-1.5 relative rounded text-[10px] font-mono border transition-all cursor-pointer shrink-0 border-slate-200">
+                          {isAdmin && (teacherTime || teacherTimeEnd) && (
+                            <button
+                              type="button"
+                              onClick={() => applyTimeChange('teacher', 'teacher', '', '')}
+                              title="Hapus jam"
+                              className="hover:bg-rose-100 text-rose-700 border-r border-slate-300 font-semibold transition-colors cursor-pointer"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
                           <button
                             type="button"
-                            onClick={() => applyTimeChange('teacher', 'teacher', '', '')}
-                            title="Hapus jam"
-                            className="px-1 py-1 hover:bg-rose-100 text-rose-700 font-semibold rounded-full transition-colors cursor-pointer"
+                            onClick={() => {
+                              if (!isAdmin) return;
+                              setActiveTimePopover({
+                                type: 'teacher',
+                                id: 'teacher',
+                                name: data?.teacher.name || 'Ustadz',
+                                startTime: teacherTime,
+                                endTime: teacherTimeEnd,
+                              });
+                            }}
+                            className={`relative transition-all mt-1 mr-1 cursor-pointer shrink-0 ${
+                              isTeacherFlashing
+                                ? 'bg-emerald-100 text-emerald-800 ring-2 ring-emerald-400 font-bold animate-pulse'
+                                : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+                            }`}
+                            title="Klik untuk melihat atau mengatur jam kehadiran"
                           >
-                            <X className="w-3.5 h-3.5" />
+                            {teacherTimeDisplay}
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (!isAdmin) return;
-                            setActiveTimePopover({
-                              type: 'teacher',
-                              id: 'teacher',
-                              name: data?.teacher.name || 'Ustadz',
-                              startTime: teacherTime,
-                              endTime: teacherTimeEnd,
-                            });
-                          }}
-                          className={`relative px-1.5 py-0.5 rounded text-[10px] font-mono border transition-all cursor-pointer shrink-0 ${
-                            isTeacherFlashing
-                              ? 'bg-emerald-100 text-emerald-800 ring-2 ring-emerald-400 font-bold animate-pulse'
-                              : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
-                          }`}
-                          title="Klik untuk melihat atau mengatur jam kehadiran"
-                        >
-                          {teacherTimeDisplay}
                           {isTeacherTimeDraft && (
                             <span
                               className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-500 ring-1 ring-white"
                               title="Jam presensi berubah dari DB"
                             />
                           )}
-                        </button>
+                        </div>
 
                         {/* H-T-I-A Toggles */}
                         {renderStatusToggles(teacherStatus, dbTeacherStatus, 'teacher')}
@@ -1168,43 +1170,45 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
 
                           <div className="flex items-center gap-1.5 shrink-0">
                             {/* Minimal Time Chip */}
-                            {isAdmin && (student.timestampStart || student.timestampEnd)  && (
+                            <div className="flex item-center gap-1.5 relative rounded text-[10px] font-mono border transition-all cursor-pointer shrink-0 border-slate-200">
+                              {isAdmin && (student.timestampStart || student.timestampEnd)  && (
+                                <button
+                                type="button"
+                                onClick={() => applyTimeChange('student', student.studentId, '', '')}
+                                title="Hapus jam"
+                                className="hover:bg-rose-100 text-rose-700 border-r border-slate-300 font-semibold transition-colors cursor-pointer"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              )}
                               <button
-                              type="button"
-                              onClick={() => applyTimeChange('student', student.studentId, '', '')}
-                              title="Hapus jam"
-                              className="px-1 py-1 hover:bg-rose-100 text-rose-700 font-semibold rounded-full transition-colors cursor-pointer"
+                                type="button"
+                                onClick={() => {
+                                  if (!isAdmin) return;
+                                  setActiveTimePopover({
+                                    type: 'student',
+                                    id: student.studentId,
+                                    name: student.name,
+                                    startTime: student.timestampStart || '',
+                                    endTime: student.timestampEnd || '',
+                                  });
+                                }}
+                                className={`relative transition-all mt-1 mr-1 cursor-pointer shrink-0 ${
+                                  isStudentFlashing
+                                    ? 'bg-emerald-100 text-emerald-800 ring-2 ring-emerald-400 font-bold animate-pulse'
+                                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+                                }`}
+                                title="Klik untuk melihat atau mengatur jam kehadiran"
                               >
-                                <X className="w-3.5 h-3.5" />
+                                {studentTimeDisplay}
                               </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (!isAdmin) return;
-                                setActiveTimePopover({
-                                  type: 'student',
-                                  id: student.studentId,
-                                  name: student.name,
-                                  startTime: student.timestampStart || '',
-                                  endTime: student.timestampEnd || '',
-                                });
-                              }}
-                              className={`relative px-1.5 py-0.5 rounded text-[10px] font-mono border transition-all cursor-pointer shrink-0 ${
-                                isStudentFlashing
-                                  ? 'bg-emerald-100 text-emerald-800 ring-2 ring-emerald-400 font-bold animate-pulse'
-                                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
-                              }`}
-                              title="Klik untuk melihat atau mengatur jam kehadiran"
-                            >
-                              {studentTimeDisplay}
                               {isStudentTimeDraft && (
                                 <span
                                   className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-500 ring-1 ring-white"
                                   title="Jam presensi berubah dari DB"
                                 />
                               )}
-                            </button>
+                            </div>
 
                             {/* H-T-I-A Toggles */}
                             {renderStatusToggles(student.status, dbStudentStatus, student.studentId)}

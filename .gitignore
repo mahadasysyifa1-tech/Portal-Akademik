@@ -2,12 +2,13 @@ node_modules/
 build/
 dist/
 coverage/
+script/
+data/
+repomix/
 .DS_Store
 *.log
 .env*
 !.env.example
-data/
-repomix/
 bun.lock
 *.sql
 repomix-output.xml
