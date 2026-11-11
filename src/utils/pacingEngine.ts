@@ -40,10 +40,17 @@ export function formatUnitDisplay(unit: SyllabusUnit): string {
   const pageStart = unit.page_start !== undefined && unit.page_start !== null ? String(unit.page_start).trim() : '';
   const title = unit.title || 'Untitled Material';
   
-  if (part) {
+  const hasPart = part !== '' && part !== '0' && Number(part) !== 0;
+  const hasPage = pageStart !== '' && pageStart !== '0' && !isNaN(Number(pageStart));
+
+  if (hasPart && hasPage) {
     return `${part}/${pageStart}: ${title}`;
+  } else if (hasPage) {
+    return `${pageStart}: ${title}`;
+  } else if (hasPart) {
+    return `Jilid ${part}: ${title}`;
   }
-  return `${pageStart}: ${title}`;
+  return title;
 }
 
 /**
@@ -297,6 +304,8 @@ export function getScheduledSessionsForSubjectClass(
           isCancelled,
           actual_materi_id: m.actual_materi_id,
           actual_page: m.actual_page,
+          actual_start_materi_id: (m as any).actual_start_materi_id,
+          actual_start_page: (m as any).actual_start_page,
           meetingNotes: m.notes
         };
       });
@@ -651,17 +660,20 @@ function buildAdjustedRemainingUnits(
     const uStart = typeof currentUnit.page_start === 'number' ? currentUnit.page_start : parseInt(String(currentUnit.page_start), 10);
     const uEnd = typeof currentUnit.page_end === 'number' ? currentUnit.page_end : parseInt(String(currentUnit.page_end), 10);
 
-    // If checkpointPage is within this unit
-    if (!isNaN(uEnd) && adjustment.checkpointPage <= uEnd) {
-      const pageStart = Math.max(uStart, adjustment.checkpointPage);
+    // checkpointPage marks the end page of completed material.
+    // The remaining syllabus for subsequent sessions must begin on checkpointPage + 1.
+    const nextStartPage = (typeof adjustment.checkpointPage === 'number' ? adjustment.checkpointPage : parseInt(String(adjustment.checkpointPage), 10)) + 1;
+
+    // If checkpointPage is within this unit and does not complete the unit entirely
+    if (!isNaN(uEnd) && nextStartPage <= uEnd) {
       if (!cutSet.has(currentUnit.id)) {
         remaining.push({
           ...currentUnit,
           raw_page_start: currentUnit.raw_page_start ?? currentUnit.page_start,
           raw_page_end: currentUnit.raw_page_end ?? currentUnit.page_end,
-          page_start: pageStart,
-          display_page_start: pageStart,
-          isPartialStart: pageStart > uStart
+          page_start: nextStartPage,
+          display_page_start: nextStartPage,
+          isPartialStart: true
         });
       }
     }
@@ -687,16 +699,152 @@ function buildAdjustedRemainingUnits(
  * Excludes cancelled sessions from material allocations and pacing divisiveness.
  * Returns array of { session: ScheduledSessionOccurrence, units: SyllabusUnit[], midpage?: number }
  */
+/**
+ * Resolves actual units and page bounds directly from recorded attendance/meeting database fields.
+ */
+export function resolveRecordedUnitsForSession(
+  session: ScheduledSessionOccurrence,
+  scopedUnits: SyllabusUnit[],
+  allUnits: SyllabusUnit[] = []
+): SyllabusUnit[] {
+  const startId = session.actual_start_materi_id || session.actual_materi_id;
+  const startPage = typeof session.actual_start_page === 'number'
+    ? session.actual_start_page
+    : session.actual_start_page ? parseInt(String(session.actual_start_page), 10) : undefined;
+  const endId = session.actual_materi_id || session.actual_start_materi_id;
+  const endPage = typeof session.actual_page === 'number'
+    ? session.actual_page
+    : session.actual_page ? parseInt(String(session.actual_page), 10) : undefined;
+
+  const pool = scopedUnits.length > 0 ? scopedUnits : allUnits;
+
+  const findUnit = (id?: string, page?: number): SyllabusUnit | undefined => {
+    if (id) {
+      const match = pool.find((u) => u.id === id || u.title === id);
+      if (match) return match;
+    }
+    if (page !== undefined && !isNaN(page)) {
+      const match = pool.find((u) => {
+        const s = typeof u.page_start === 'number' ? u.page_start : parseInt(String(u.page_start), 10);
+        const e = typeof u.page_end === 'number' ? u.page_end : parseInt(String(u.page_end), 10);
+        return !isNaN(s) && !isNaN(e) && page >= Math.min(s, e) && page <= Math.max(s, e);
+      });
+      if (match) return match;
+    }
+    return undefined;
+  };
+
+  const startUnit = findUnit(startId, startPage);
+  const endUnit = findUnit(endId, endPage);
+
+  if (startUnit && endUnit) {
+    if (startUnit.id === endUnit.id) {
+      const sp = startPage ?? startUnit.page_start;
+      const ep = endPage ?? startPage ?? startUnit.page_end;
+      return [{
+        ...startUnit,
+        raw_page_start: startUnit.raw_page_start ?? startUnit.page_start,
+        raw_page_end: startUnit.raw_page_end ?? startUnit.page_end,
+        page_start: sp,
+        page_end: ep,
+        display_page_start: sp,
+        display_page_end: ep,
+      }];
+    }
+    const sIdx = pool.findIndex((u) => u.id === startUnit.id);
+    const eIdx = pool.findIndex((u) => u.id === endUnit.id);
+    if (sIdx !== -1 && eIdx !== -1) {
+      const minI = Math.min(sIdx, eIdx);
+      const maxI = Math.max(sIdx, eIdx);
+      const slice = pool.slice(minI, maxI + 1);
+      return slice.map((u, idx) => {
+        const cloned = { ...u };
+        if (idx === 0 && startPage !== undefined) {
+          cloned.page_start = startPage;
+          cloned.display_page_start = startPage;
+          cloned.isPartialStart = true;
+        }
+        if (idx === slice.length - 1 && endPage !== undefined) {
+          cloned.page_end = endPage;
+          cloned.display_page_end = endPage;
+          cloned.isPartialEnd = true;
+        }
+        return cloned;
+      });
+    }
+    return [
+      {
+        ...startUnit,
+        page_start: startPage ?? startUnit.page_start,
+        page_end: startUnit.page_end,
+      },
+      {
+        ...endUnit,
+        page_start: endUnit.page_start,
+        page_end: endPage ?? endUnit.page_end,
+      }
+    ];
+  }
+
+  const single = startUnit || endUnit;
+  if (single) {
+    const sp = startPage ?? single.page_start;
+    const ep = endPage ?? startPage ?? single.page_end;
+    return [{
+      ...single,
+      page_start: sp,
+      page_end: ep,
+      display_page_start: sp,
+      display_page_end: ep,
+    }];
+  }
+
+  if (startPage !== undefined || endPage !== undefined) {
+    const sp = startPage ?? endPage!;
+    const ep = endPage ?? startPage!;
+    return [{
+      id: startId || endId || `rec-${session.id}`,
+      order: 0,
+      title: 'Materi Tercatat',
+      page_start: sp,
+      page_end: ep,
+      display_page_start: sp,
+      display_page_end: ep,
+    }];
+  }
+
+  return [];
+}
+
+/**
+ * Proportional pacing engine:
+ * - Past cards are stripped from theoretical material unless recorded in the database.
+ * - Recorded sessions read directly from database actual start & end material/page.
+ * - Proportional pacing distributes the remaining syllabus only across active current & upcoming sessions.
+ * - Next session after calibration starts cleanly on the next page (checkpointPage + 1).
+ */
 export function computePacingProjection(
   db: DatabaseState,
   subject_id: string,
-  class_section_id: string
+  class_section_id: string,
+  options?: { viewMode?: 'adjusted' | 'target' }
 ): PacingSessionProjection[] {
   const units = getScopedUnits(db, subject_id, class_section_id);
+  const allUnits = Array.isArray(db.syllabusUnits) ? db.syllabusUnits : [];
   const sessions = getScheduledSessionsForSubjectClass(db, subject_id, class_section_id);
 
   if (sessions.length === 0) {
     return [];
+  }
+
+  // Pure baseline target view: distribute units proportionally across all scheduled sessions without cancellation drops or attendance shifts
+  if (options?.viewMode === 'target') {
+    const targetSessions = sessions.map((s, idx) => ({
+      ...s,
+      meetingIndex: idx + 1,
+      isCancelled: false,
+    }));
+    return runProportionalPacing(units, targetSessions);
   }
 
   const activeSessions = sessions.filter((s) => !s.isCancelled);
@@ -710,6 +858,17 @@ export function computePacingProjection(
     }));
   }
 
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+  const isSessionRecorded = (s: ScheduledSessionOccurrence) =>
+    Boolean(
+      (typeof s.actual_page === 'number' && s.actual_page > 0) ||
+      (typeof s.actual_start_page === 'number' && s.actual_start_page > 0) ||
+      (s.actual_materi_id && s.actual_materi_id.trim() !== '') ||
+      (s.actual_start_materi_id && s.actual_start_materi_id.trim() !== '')
+    );
+
   const scopes = Array.isArray(db.syllabusScopes) ? db.syllabusScopes : [];
   const targetSubject = (db.subjects || []).find((s) => s.id === subject_id || s.code === subject_id);
   const scope = scopes.find(
@@ -717,86 +876,57 @@ export function computePacingProjection(
       (s.subject_id === subject_id || (targetSubject && (s.subject_id === targetSubject.id || s.subject_id === targetSubject.code))) &&
       (s.class_section_id === class_section_id || (s as any).class_code === class_section_id || (s as any).classId === class_section_id)
   );
+
+  // Identify all active sessions with recorded progress
+  const recordedActiveSessions = activeSessions.filter(isSessionRecorded);
+
   let adjustment = scope?.adjustment;
 
-  // If manual adjustment is not set, derive adjustment checkpoint from the latest meeting with recorded actual_page
-  if (!adjustment) {
-    const recordedActiveSessions = activeSessions.filter(
-      (s) => typeof s.actual_page === 'number' && s.actual_page > 0
-    );
-    if (recordedActiveSessions.length > 0) {
-      const latestRecorded = recordedActiveSessions[recordedActiveSessions.length - 1];
-      let resolvedUnitId = latestRecorded.actual_materi_id || '';
-      if (!resolvedUnitId && typeof latestRecorded.actual_page === 'number') {
-        const matched = units.find((u) => {
-          const s = typeof u.page_start === 'number' ? u.page_start : parseInt(String(u.page_start), 10);
-          const e = typeof u.page_end === 'number' ? u.page_end : parseInt(String(u.page_end), 10);
-          return !isNaN(s) && !isNaN(e) && latestRecorded.actual_page! >= Math.min(s, e) && latestRecorded.actual_page! <= Math.max(s, e);
-        });
-        if (matched) resolvedUnitId = matched.id;
-      }
-      adjustment = {
-        checkpointSessionIndex: latestRecorded.meetingIndex,
-        checkpointSessionId: latestRecorded.id,
-        checkpointDate: latestRecorded.date,
-        checkpointUnitId: resolvedUnitId,
-        checkpointPage: latestRecorded.actual_page || 1,
-        strategy: 'accelerate',
-        cutUnitIds: []
-      };
+  if (!adjustment && recordedActiveSessions.length > 0) {
+    const latestRecorded = recordedActiveSessions[recordedActiveSessions.length - 1];
+    let resolvedUnitId = latestRecorded.actual_materi_id || latestRecorded.actual_start_materi_id || '';
+    const recEndPage = latestRecorded.actual_page ?? latestRecorded.actual_start_page ?? 1;
+
+    if (!resolvedUnitId) {
+      const matched = units.find((u) => {
+        const s = typeof u.page_start === 'number' ? u.page_start : parseInt(String(u.page_start), 10);
+        const e = typeof u.page_end === 'number' ? u.page_end : parseInt(String(u.page_end), 10);
+        return !isNaN(s) && !isNaN(e) && recEndPage >= Math.min(s, e) && recEndPage <= Math.max(s, e);
+      });
+      if (matched) resolvedUnitId = matched.id;
     }
+
+    adjustment = {
+      checkpointSessionIndex: latestRecorded.meetingIndex,
+      checkpointSessionId: latestRecorded.id,
+      checkpointDate: latestRecorded.date,
+      checkpointUnitId: resolvedUnitId,
+      checkpointPage: recEndPage,
+      strategy: 'accelerate',
+      cutUnitIds: []
+    };
   }
 
-  let activeProjections: PacingSessionProjection[];
+  // Determine which active sessions receive projected pacing:
+  // Strictly future/current sessions that are NOT already recorded in database.
+  // Past sessions without records are stripped (receive units: []).
+  const futureUnrecordedSessions = activeSessions.filter(
+    (s) => (s.date >= todayStr || s.date === todayStr) && !isSessionRecorded(s)
+  );
 
-  // Standard projection if no teacher calibration has been set or derived
-  if (!adjustment) {
-    activeProjections = runProportionalPacing(units, activeSessions);
+  let remainingUnits: SyllabusUnit[];
+  if (adjustment) {
+    remainingUnits = buildAdjustedRemainingUnits(units, adjustment);
   } else {
-    // Find checkpoint index in active sessions
-    let checkpointIdx = activeSessions.findIndex(
-      (s) => s.meetingIndex === adjustment!.checkpointSessionIndex
-    );
-    if (checkpointIdx === -1 && adjustment.checkpointSessionId) {
-      checkpointIdx = activeSessions.findIndex((s) => s.id === adjustment!.checkpointSessionId);
-    }
-    if (checkpointIdx === -1 && adjustment.checkpointDate) {
-      checkpointIdx = activeSessions.findIndex((s) => s.date === adjustment!.checkpointDate);
-    }
-    if (checkpointIdx === -1) {
-      checkpointIdx = 0;
-    }
-
-    // If checkpoint is at the first active session
-    if (checkpointIdx === 0) {
-      const remainingUnits = buildAdjustedRemainingUnits(units, adjustment);
-      activeProjections = runProportionalPacing(remainingUnits, activeSessions).map((p, idx) => ({
-        ...p,
-        isAdjusted: true,
-        isCheckpoint: idx === 0
-      }));
-    } else {
-      // Past active sessions keep their standard pacing from the full original academic year projection
-      const fullOriginal = runProportionalPacing(units, activeSessions);
-      const pastProjections = fullOriginal.slice(0, checkpointIdx);
-
-      // Remaining active sessions from checkpoint onward take the remaining units
-      const remainingSessions = activeSessions.slice(checkpointIdx);
-      const remainingUnits = buildAdjustedRemainingUnits(units, adjustment);
-      const remainingProjections = runProportionalPacing(remainingUnits, remainingSessions).map((p, idx) => ({
-        ...p,
-        isAdjusted: true,
-        isCheckpoint: idx === 0
-      }));
-
-      activeProjections = [...pastProjections, ...remainingProjections];
-    }
+    remainingUnits = units;
   }
 
-  // Recombine activeProjections with cancelled sessions in exact chronological order
-  const activeMap = new Map<string, PacingSessionProjection>();
-  activeProjections.forEach((p) => activeMap.set(p.session.id, p));
+  // Run proportional pacing across remaining unrecorded sessions from today onwards
+  const remainingProjections = runProportionalPacing(remainingUnits, futureUnrecordedSessions);
+  const remainingMap = new Map<string, PacingSessionProjection>();
+  remainingProjections.forEach((p) => remainingMap.set(p.session.id, p));
 
+  // Assemble full projection:
   return sessions.map((session) => {
     if (session.isCancelled) {
       return {
@@ -806,14 +936,48 @@ export function computePacingProjection(
         endWeightProgress: 0
       };
     }
-    return (
-      activeMap.get(session.id) || {
+
+    // 1. If recorded in database: read what's in the database directly
+    if (isSessionRecorded(session)) {
+      const recUnits = resolveRecordedUnitsForSession(session, units, allUnits);
+      return {
+        session,
+        units: recUnits,
+        startWeightProgress: 0,
+        endWeightProgress: 0,
+        isAdjusted: true,
+        isCheckpoint: true
+      };
+    }
+
+    // 2. Past session without recorded material: STRIP from material per user instructions
+    if (session.date < todayStr) {
+      return {
         session,
         units: [],
         startWeightProgress: 0,
-        endWeightProgress: 0
-      }
-    );
+        endWeightProgress: 0,
+        isAdjusted: false,
+        isCheckpoint: false
+      };
+    }
+
+    // 3. Current / Future session: display projected units from remaining pacing
+    const proj = remainingMap.get(session.id);
+    if (proj) {
+      return {
+        ...proj,
+        isAdjusted: Boolean(adjustment)
+      };
+    }
+
+    return {
+      session,
+      units: [],
+      startWeightProgress: 0,
+      endWeightProgress: 0,
+      isAdjusted: Boolean(adjustment)
+    };
   });
 }
 
@@ -1053,5 +1217,80 @@ export function resolveViewerCurrentAndNextClass(
   return {
     currentClass: currentResult,
     nextClass: nextResult
+  };
+}
+
+export interface PacingStatusResult {
+  meetingIndex: number;
+  diff: number;
+  actualPage: number;
+  targetPage: number;
+}
+
+/**
+ * Calculates current pacing status (behind vs ahead vs on track) based on the latest recorded session.
+ */
+export function computePacingStatus(
+  db: DatabaseState,
+  subjectId: string,
+  classId: string
+): PacingStatusResult | null {
+  if (!subjectId || !classId) return null;
+  const projection = computePacingProjection(db, subjectId, classId);
+  if (!projection || projection.length === 0) return null;
+
+  // Find latest meeting that has actual progress recorded
+  const recordedSessions = projection.filter(
+    (p) => !p.session.isCancelled && typeof p.session.actual_page === 'number' && p.session.actual_page > 0
+  );
+  if (recordedSessions.length === 0) return null;
+
+  const latest = recordedSessions[recordedSessions.length - 1];
+  const actualPage = latest.session.actual_page!;
+  const actualMateriId = latest.session.actual_materi_id;
+  const scopedUnits = getScopedUnits(db, subjectId, classId);
+
+  // Helper to calculate cumulative pages across scoped units (handles cut materials, multiple books, and page offsets)
+  const getCumulativePage = (unitId: string | undefined, pageNum: number): number => {
+    if (scopedUnits.length === 0) return pageNum;
+
+    let uIdx = unitId ? scopedUnits.findIndex((u) => u.id === unitId) : -1;
+    if (uIdx === -1) {
+      uIdx = scopedUnits.findIndex((u) => {
+        const s = typeof u.page_start === 'number' ? u.page_start : parseInt(String(u.page_start), 10);
+        const e = typeof u.page_end === 'number' ? u.page_end : parseInt(String(u.page_end), 10);
+        return !isNaN(s) && !isNaN(e) && pageNum >= Math.min(s, e) && pageNum <= Math.max(s, e);
+      });
+    }
+    if (uIdx === -1) uIdx = 0;
+
+    let cum = 0;
+    for (let i = 0; i < uIdx; i++) {
+      const s = Number(scopedUnits[i].page_start);
+      const e = Number(scopedUnits[i].page_end);
+      const span = !Number.isNaN(s) && !Number.isNaN(e) && e >= s ? e - s + 1 : 1;
+      cum += span;
+    }
+
+    const currentUnit = scopedUnits[uIdx];
+    const uStart = Number(currentUnit?.page_start || 1);
+    cum += Math.max(0, pageNum - (Number.isNaN(uStart) ? 1 : uStart) + 1);
+    return cum;
+  };
+
+  const targetUnit = latest.units[latest.units.length - 1] || scopedUnits[0];
+  const rawTarget = targetUnit?.page_end ?? targetUnit?.page_start ?? 0;
+  const targetPage = typeof rawTarget === 'number' ? rawTarget : parseInt(String(rawTarget), 10) || 0;
+  const targetUnitId = targetUnit?.id;
+
+  const actualCum = getCumulativePage(actualMateriId, actualPage);
+  const targetCum = getCumulativePage(targetUnitId, targetPage);
+  const diff = actualCum - targetCum;
+
+  return {
+    meetingIndex: latest.session.meetingIndex,
+    diff,
+    actualPage,
+    targetPage
   };
 }

@@ -15,3 +15,17 @@ export async function loadMonthRollCalls(year: number, month: number): Promise<v
 export function getCachedRollCall(meetingId: string): any | undefined {
     return byMeeting.get(meetingId);
 }
+
+export function invalidateRollCallCache(meetingId?: string): void {
+    if (meetingId) {
+        byMeeting.delete(meetingId);
+    } else {
+        byMeeting.clear();
+    }
+}
+
+if (typeof window !== 'undefined') {
+    window.addEventListener('attendance:saved', () => {
+        invalidateRollCallCache();
+    });
+}

@@ -3,30 +3,44 @@ import {
   Calendar as CalendarIcon,
   Clock,
   MapPin,
-  User,
-  School,
+  UserRoundCheck,
   BookOpen,
   ArrowRight,
-  Sparkles,
   CheckCircle2,
   CalendarCheck2,
-  AlertCircle,
-  ExternalLink,
   Flame,
-  Layers,
   Video,
-  Book
+  Book,
+  TrendingUp,
+  TrendingDown,
+  Check,
+  Newspaper,
+  Bell
 } from 'lucide-react';
-import { DatabaseState, SyllabusUnit, DayOfWeek, ScheduledSessionOccurrence } from '../types';
+import { DatabaseState, SyllabusUnit, DayOfWeek, ScheduledSessionOccurrence, AttendanceSummaryItem } from '../types';
+import { TeacherCard } from './directory/TeachersDirectory';
+import { StudentCard } from './directory/StudentsDirectory';
+import { AttendanceHistoryModal } from './directory/AttendanceHistoryModal';
 import { ClassIcon } from './ClassIcon';
 import {
   resolveViewerCurrentAndNextClass,
   formatUnitDisplay,
   getScheduledSessionsForSubjectClass,
   getViewerScheduledSessions,
-  get_units_for_session
+  get_units_for_session,
+  computePacingStatus,
+  getScopedUnits
 } from '../utils/pacingEngine';
 import type { ViewerRole } from '../types/viewer';
+import { AttendanceModal } from './attendance/AttendanceModal';
+import { buildMeetingId } from '../utils/kaldikHelpers';
+import {
+  useAttendancePendingStore,
+  type AttendancePendingStore
+} from '../utils/useAttendancePendingStore';
+import { useAuth } from '../context/AuthContext';
+
+
 const DAY_LABELS: Record<DayOfWeek, string> = {
   Monday: 'Senin',
   Tuesday: 'Selasa',
@@ -44,9 +58,15 @@ interface HomeTabProps {
   viewerId: string;
   setViewerId: (id: string) => void;
   onNavigateToJournal: (subjectId: string, classId: string, date: string) => void;
+  onNavigateToSyllabus?: (subjectId: string, classId: string, date?: string) => void;
   onNavigateToSchedule: () => void;
+  onSelectTeacherSchedule?: (teacherId: string) => void;
+  onSelectStudentSchedule?: (classId: string, studentId?: string) => void;
   onNavigateToBooks?: (bookId?: string) => void;
   onNavigateToAttendance?: (date: string, classId: string, sessionId: string, subjectId?: string) => void;
+  isAdmin?: boolean;
+  pendingStore?: AttendancePendingStore;
+  onUpdateDb?: (updater: (prev: DatabaseState) => DatabaseState) => void;
 }
 
 export const HomeTab: React.FC<HomeTabProps> = ({
@@ -56,10 +76,136 @@ export const HomeTab: React.FC<HomeTabProps> = ({
   viewerId,
   setViewerId,
   onNavigateToJournal,
+  onNavigateToSyllabus,
   onNavigateToSchedule,
+  onSelectTeacherSchedule,
+  onSelectStudentSchedule,
   onNavigateToBooks,
-  onNavigateToAttendance
+  onNavigateToAttendance,
+  isAdmin = false,
+  pendingStore,
+  onUpdateDb
 }) => {
+  const auth = useAuth();
+  const effectiveIsAdmin = isAdmin || auth.isAdmin;
+
+  const fallbackStore = useAttendancePendingStore();
+  const store = pendingStore || fallbackStore;
+  const [activeAttendanceOcc, setActiveAttendanceOcc] = useState<{
+    occurrence: ScheduledSessionOccurrence;
+    units: SyllabusUnit[];
+  } | null>(null);
+
+  // Attendance summary for Teacher / Student profile card
+  const [summaryMap, setSummaryMap] = useState<Record<string, AttendanceSummaryItem>>({});
+  const [activeHistoryModal, setActiveHistoryModal] = useState<{
+    personType: 'teacher' | 'student';
+    personId: string;
+    personName: string;
+    personSubtitle: string;
+    summary?: AttendanceSummaryItem;
+  } | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    if (auth.role === 'teacher') {
+      fetch('/api/attendance/summary?type=teacher')
+        .then((r) => r.json())
+        .then((d) => {
+          if (isMounted && d && typeof d === 'object') setSummaryMap(d);
+        })
+        .catch(() => {});
+    } else if (auth.role === 'student') {
+      fetch('/api/attendance/summary?type=student')
+        .then((r) => r.json())
+        .then((d) => {
+          if (isMounted && d && typeof d === 'object') setSummaryMap(d);
+        })
+        .catch(() => {});
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, [auth.role]);
+
+  // Current Teacher Profile computation
+  const myTeacher = useMemo(() => {
+    if (auth.role !== 'teacher') return null;
+    return (
+      db.teachers.find((t) => t.id === auth.teacherId) ||
+      db.teachers.find((t) => t.email && t.email.toLowerCase() === auth.user?.email?.toLowerCase()) ||
+      null
+    );
+  }, [auth.role, auth.teacherId, auth.user, db.teachers]);
+
+  // Compute teaching load from active rules (exact same as TeachersDirectory)
+  const teacherStats = useMemo(() => {
+    if (!myTeacher) return { sessions: 0, subjects: new Set<string>() };
+    const stats = { sessions: 0, subjects: new Set<string>() };
+    (db.rules || []).forEach((r) => {
+      if (r.active && r.teacherId === myTeacher.id) {
+        const daysCount = r.daysOfWeek?.length || 1;
+        stats.sessions += daysCount;
+        stats.subjects.add(r.subjectId);
+      }
+    });
+    return stats;
+  }, [myTeacher, db.rules]);
+
+  const taughtSubjects = useMemo(() => {
+    if (!myTeacher) return [];
+    return Array.from(teacherStats.subjects).map((sid) => db.subjects.find((s) => s.id === sid)).filter(Boolean);
+  }, [myTeacher, teacherStats, db.subjects]);
+
+  // Current Student Profile computation
+  const myStudent = useMemo(() => {
+    if (auth.role !== 'student') return null;
+    return (
+      (db.students || []).find((s) => s.id === auth.studentId) ||
+      (db.students || []).find((s) => s.email && s.email.toLowerCase() === auth.user?.email?.toLowerCase()) ||
+      null
+    );
+  }, [auth.role, auth.studentId, auth.user, db.students]);
+
+  // Compute student enrollments (exact same as StudentsDirectory)
+  const studentEnrolledClasses = useMemo(() => {
+    if (!myStudent) {
+      if (viewerId) {
+        const cls = db.classes.find((c) => c.id === viewerId);
+        return cls ? [cls] : [];
+      }
+      return [];
+    }
+    const classIdSet = new Set<string>();
+    if (myStudent.enrolledClassIds && Array.isArray(myStudent.enrolledClassIds)) {
+      myStudent.enrolledClassIds.forEach((cid) => classIdSet.add(cid));
+    }
+    (db.enrollments || []).forEach((e: any) => {
+      if (e.studentId === myStudent.id) {
+        classIdSet.add(e.classId);
+      }
+    });
+    if (myStudent.classId) {
+      classIdSet.add(myStudent.classId);
+    }
+    const matched = db.classes.filter((c) => classIdSet.has(c.id));
+    if (matched.length > 0) return matched;
+    if (viewerId) {
+      const directCls = db.classes.find((c) => c.id === viewerId);
+      if (directCls) return [directCls];
+    }
+    return db.classes.slice(0, 1);
+  }, [myStudent, db.enrollments, db.classes, viewerId]);
+
+
+  const navigateToSyllabusTimeline = (subjectId: string, classId: string, date?: string) => {
+    if (onNavigateToSyllabus) {
+      onNavigateToSyllabus(subjectId, classId, date);
+    } else {
+      onNavigateToJournal(subjectId, classId, date || '');
+    }
+  };
+
   // Live ticker clock
   const [currentTime, setCurrentTime] = useState<Date>(new Date());
 
@@ -142,6 +288,43 @@ export const HomeTab: React.FC<HomeTabProps> = ({
     const targetMidnight = new Date(ny, nm - 1, nd);
     const diffDays = Math.max(1, Math.round((targetMidnight.getTime() - todayMidnight.getTime()) / (24 * 3600 * 1000)));
     return `${diffDays} hari lagi`;
+  };
+
+  // Helper for computing pacing badge
+  const renderPacingBadge = (subjectId?: string, classId?: string) => {
+    if (!subjectId || !classId) return null;
+    const status = computePacingStatus(db, subjectId, classId);
+    if (!status) return null;
+
+    return (
+      <div className="inline-flex items-center gap-1">
+        {status.diff > 0 ? (
+          <span
+            className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-300 shadow-2xs"
+            title={`Tercatat hal. ${status.actualPage} vs target hal. ${status.targetPage} pada Sesi #${status.meetingIndex}`}
+          >
+            <TrendingUp className="w-3 h-3 text-emerald-600" />
+            <span>lebih {status.diff} Hal</span>
+          </span>
+        ) : status.diff < 0 ? (
+          <span
+            className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-lg border border-rose-200 shadow-2xs"
+            title={`Tercatat hal. ${status.actualPage} vs target hal. ${status.targetPage} pada Sesi #${status.meetingIndex}`}
+          >
+            <TrendingDown className="w-3 h-3 text-rose-600" />
+            <span>telat {status.diff * -1} Hal</span>
+          </span>
+        ) : (
+          <span
+            className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded-lg border border-slate-300 shadow-2xs"
+            title={`Tercatat tepat pada target hal. ${status.targetPage} pada Sesi #${status.meetingIndex}`}
+          >
+            <Check className="w-3 h-3 text-emerald-600" />
+            <span>Sesuai Target</span>
+          </span>
+        )}
+      </div>
+    );
   };
 
   // Remaining time logic for single view
@@ -312,9 +495,23 @@ export const HomeTab: React.FC<HomeTabProps> = ({
 
             {/* Material rendered via get_units_for_session */}
             <div className="space-y-1.5 pt-1">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
-                Materi Silabus Sesi Ini:
-              </span>
+              <div className="flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() =>
+                    navigateToSyllabusTimeline(
+                      cClass.occurrence.subjectId,
+                      cClass.occurrence.classId,
+                      cClass.occurrence.date
+                    )
+                  }
+                  className="text-[11px] font-bold text-slate-500 uppercase tracking-wider hover:text-slate-800 hover:underline flex items-center gap-1 cursor-pointer transition-colors"
+                  title="Klik untuk membuka Silabus & Timeline Pembelajaran"
+                >
+                  <span>Materi Silabus Sesi Ini</span>
+                  <ArrowRight className="w-3 h-3 text-slate-400" />
+                </button>
+              </div>
 
               {cClass.units.length === 0 ? (
                 <div className="text-xs text-slate-400 italic p-2.5 rounded-xl bg-slate-50 border border-slate-100">
@@ -326,7 +523,7 @@ export const HomeTab: React.FC<HomeTabProps> = ({
                     <div
                       key={unit.id}
                       onClick={() =>
-                        onNavigateToJournal(
+                        navigateToSyllabusTimeline(
                           cClass.occurrence.subjectId,
                           cClass.occurrence.classId,
                           cClass.occurrence.date
@@ -336,7 +533,7 @@ export const HomeTab: React.FC<HomeTabProps> = ({
                       style={{
                         borderColor: `${cColor}99`
                       }}
-                      title="Klik untuk membuka materi pada Jurnal"
+                      title="Klik untuk membuka materi pada Silabus & Timeline"
                     >
                       {/* Left: (bullet) (book) (material) */}
                       <div className="flex items-start gap-2 min-w-0 flex-1">
@@ -403,43 +600,35 @@ export const HomeTab: React.FC<HomeTabProps> = ({
           className="mt-5 pt-3.5 border-t flex items-center justify-between flex-wrap gap-2"
           style={{ borderColor: `${cColor}55` }}
         >
-          <span className="text-[11px] text-slate-700 font-semibold">
-            Pertemuan #{cClass.occurrence.meetingIndex}
-          </span>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[11px] text-slate-700 font-semibold">
+              Pertemuan #{cClass.occurrence.meetingIndex}
+            </span>
+            {renderPacingBadge(cClass.occurrence.subjectId, cClass.occurrence.classId)}
+          </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() =>
-                onNavigateToAttendance?.(
-                  cClass.occurrence.date,
-                  cClass.occurrence.classId,
-                  cClass.occurrence.sessionId,
-                  cClass.occurrence.subjectId
-                )
+                setActiveAttendanceOcc({
+                  occurrence: cClass.occurrence,
+                  units: cClass.units
+                })
               }
-              className="flex items-center gap-1.5 text-xs font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 px-3 py-1.5 rounded-xl border border-amber-300 shadow-2xs transition-all cursor-pointer"
+              className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl border shadow-2xs transition-all cursor-pointer ${
+                auth.canEditSession(cClass.occurrence.teacherId)
+                  ? 'text-amber-900 bg-amber-50 hover:bg-amber-100 border-amber-300'
+                  : 'text-slate-700 bg-slate-50 hover:bg-slate-100 border-slate-300'
+              }`}
+              title={auth.canEditSession(cClass.occurrence.teacherId) ? 'Catat Presensi Kelas Ini' : 'Lihat Presensi (Hanya Ustadz Pengampu / Admin yang dapat mengedit)'}
             >
-              <CheckCircle2 className="w-3.5 h-3.5 text-amber-600" />
-              <span>Presensi Sesi Ini</span>
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                onNavigateToJournal(
-                  cClass.occurrence.subjectId,
-                  cClass.occurrence.classId,
-                  cClass.occurrence.date
-                )
-              }
-              className="flex items-center gap-1.5 text-xs font-bold text-slate-900 hover:text-black bg-white hover:bg-slate-50 px-3 py-1.5 rounded-xl border shadow-2xs transition-all cursor-pointer"
-              style={{ borderColor: cColor }}
-            >
-              <span>Silabus</span>
-              <ArrowRight className="w-3.5 h-3.5" />
+              <UserRoundCheck className={`w-3.5 h-3.5 ${auth.canEditSession(cClass.occurrence.teacherId) ? 'text-amber-600' : 'text-slate-500'}`} />
+              <span>{auth.canEditSession(cClass.occurrence.teacherId) ? 'Isi Absen' : 'Lihat Presensi'}</span>
             </button>
           </div>
         </div>
       </div>
+
     );
   };
 
@@ -551,9 +740,23 @@ export const HomeTab: React.FC<HomeTabProps> = ({
 
             {/* Material rendered via get_units_for_session */}
             <div className="space-y-1.5 pt-1">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
-                Materi Target Sesi Ini:
-              </span>
+              <div className="flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() =>
+                    navigateToSyllabusTimeline(
+                      nClass.occurrence.subjectId,
+                      nClass.occurrence.classId,
+                      nClass.occurrence.date
+                    )
+                  }
+                  className="text-[11px] font-bold text-slate-500 uppercase tracking-wider hover:text-emerald-900 hover:underline flex items-center gap-1 cursor-pointer transition-colors"
+                  title="Klik untuk membuka Silabus & Timeline Pembelajaran"
+                >
+                  <span>Materi Target Sesi Ini</span>
+                  <ArrowRight className="w-3 h-3 text-slate-400" />
+                </button>
+              </div>
 
               {nClass.units.length === 0 ? (
                 <div className="text-xs text-slate-400 italic p-2.5 rounded-xl bg-slate-50 border border-slate-100">
@@ -565,14 +768,14 @@ export const HomeTab: React.FC<HomeTabProps> = ({
                     <div
                       key={unit.id}
                       onClick={() =>
-                        onNavigateToJournal(
+                        navigateToSyllabusTimeline(
                           nClass.occurrence.subjectId,
                           nClass.occurrence.classId,
                           nClass.occurrence.date
                         )
                       }
                       className="p-2.5 rounded-xl bg-slate-50 hover:bg-emerald-50 hover:border-emerald-300 border border-slate-200 text-slate-800 hover:text-emerald-950 text-xs font-semibold flex items-center justify-between gap-2 cursor-pointer transition-colors group"
-                      title="Klik untuk membuka materi pada Jurnal"
+                      title="Klik untuk membuka materi pada Silabus & Timeline"
                     >
                       {/* Left: (bullet) (book) (material) */}
                       <div className="flex items-start gap-2 min-w-0 flex-1">
@@ -633,38 +836,30 @@ export const HomeTab: React.FC<HomeTabProps> = ({
 
         {/* Deep link action button */}
         <div className="mt-5 pt-3.5 border-t border-slate-100 flex items-center justify-between flex-wrap gap-2">
-          <span className="text-[11px] text-slate-500 font-semibold">
-            Pertemuan #{nClass.occurrence.meetingIndex}
-          </span>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[11px] text-slate-500 font-semibold">
+              Pertemuan #{nClass.occurrence.meetingIndex}
+            </span>
+            {renderPacingBadge(nClass.occurrence.subjectId, nClass.occurrence.classId)}
+          </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() =>
-                onNavigateToAttendance?.(
-                  nClass.occurrence.date,
-                  nClass.occurrence.classId,
-                  nClass.occurrence.sessionId,
-                  nClass.occurrence.subjectId
-                )
+                setActiveAttendanceOcc({
+                  occurrence: nClass.occurrence,
+                  units: nClass.units
+                })
               }
-              className="flex items-center gap-1.5 text-xs font-bold text-emerald-800 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-xl border border-emerald-300 shadow-2xs transition-all cursor-pointer"
+              className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl border shadow-2xs transition-all cursor-pointer ${
+                auth.canEditSession(nClass.occurrence.teacherId)
+                  ? 'text-emerald-800 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border-emerald-300'
+                  : 'text-slate-700 bg-slate-50 hover:bg-slate-100 border-slate-300'
+              }`}
+              title={auth.canEditSession(nClass.occurrence.teacherId) ? 'Catat Presensi Kelas Ini' : 'Lihat Presensi (Hanya Ustadz Pengampu / Admin yang dapat mengedit)'}
             >
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Presensi Sesi Ini</span>
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                onNavigateToJournal(
-                  nClass.occurrence.subjectId,
-                  nClass.occurrence.classId,
-                  nClass.occurrence.date
-                )
-              }
-              className="flex items-center gap-1.5 text-xs font-bold text-slate-700 hover:text-slate-900 bg-white hover:bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 transition-all cursor-pointer"
-            >
-              <span>Silabus</span>
-              <ArrowRight className="w-3.5 h-3.5" />
+              <UserRoundCheck className={`w-3.5 h-3.5 ${auth.canEditSession(nClass.occurrence.teacherId) ? 'text-emerald-600' : 'text-slate-500'}`} />
+              <span>{auth.canEditSession(nClass.occurrence.teacherId) ? 'Isi Absen' : 'Lihat Presensi'}</span>
             </button>
           </div>
         </div>
@@ -706,98 +901,242 @@ export const HomeTab: React.FC<HomeTabProps> = ({
     </div>
   );
 
-  return (
-    <div className="space-y-6 max-w-5xl mx-auto">
-      {/* Viewer Selector */}
-      <div className="relative overflow-hidden">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 relative z-10">
-          <div>
-            <div className="flex items-center flex-col gap-2 mb-1.5">
+  // Guest View: Announcement & Official News (no deep links per user requirement)
+  if (auth.role === 'guest') {
+    return (
+      <div className="space-y-6 max-w-5xl mx-auto">
+        {/* Sticky Top Header Bar */}
+        <div className="sticky top-14 z-20 backdrop-blur-md bg-white/95 rounded-2xl border border-slate-200/90 shadow-md p-3.5 sm:px-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
               <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-900 border border-amber-200 flex items-center gap-1.5">
                 <Flame className="w-3.5 h-3.5 text-amber-600" />
                 Selamat Datang di Portal IJMA
               </span>
-              <span className="text-xs text-white font-mono font-medium">
-                <span>{clockFormatted} WIB </span><span>{todayFormatted}</span>
-              </span>
+            </div>
+            <div className="flex items-center gap-2 text-xs font-mono font-medium text-slate-500">
+              <Clock className="w-3.5 h-3.5 text-slate-400" />
+              <span>{clockFormatted} WIB</span>
+              <span>·</span>
+              <span>{todayFormatted}</span>
             </div>
           </div>
+        </div>
 
-          {/* Role Switcher */}
-          <div className="bg-slate-50 p-1.5 rounded-2xl border border-slate-200 flex flex-col gap-1.5 shrink-0">
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => {
-                  setViewerRole('student');
-                  if (!viewerId && db.classes.length > 0) setViewerId(db.classes[0].id);
-                }}
-                className={`flex-1 px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
-                  viewerRole === 'student'
-                    ? 'bg-white text-amber-700 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Peserta
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setViewerRole('teacher');
-                  if (!viewerId && db.teachers.length > 0) setViewerId(db.teachers[0].id);
-                }}
-                className={`flex-1 px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
-                  viewerRole === 'teacher'
-                    ? 'bg-white text-amber-700 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Ustadz
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewerRole('admin')}
-                className={`flex-1 px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
-                  viewerRole === 'admin'
-                    ? 'bg-white text-amber-700 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Semua
-              </button>
+        {/* Guest News & Announcements Dashboard */}
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Newspaper className="w-5 h-5 text-amber-600" />
+              <h2 className="text-base sm:text-lg font-bold text-slate-900">
+                Warta &amp; Pengumuman Resmi
+              </h2>
+            </div>
+            <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
+              Rilis Terbaru
+            </span>
+          </div>
+
+          {/* Featured Announcement Card */}
+          <div className="bg-white rounded-3xl border border-slate-200/90 p-6 sm:p-7 shadow-xs relative overflow-hidden">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-700">
+                Pengumuman Resmi
+              </span>
+              <span className="text-slate-300">·</span>
+              <span className="text-xs text-slate-500">{todayFormatted}</span>
             </div>
 
-            {/* Selector dropdown for Class or Teacher */}
-            {viewerRole === 'student' && (
-              <select
-                value={viewerId || db.classes[0]?.id}
-                onChange={(e) => setViewerId(e.target.value)}
-                className="w-full text-xs font-semibold bg-white border border-slate-300 rounded-xl px-2.5 py-1.5 text-slate-800"
-              >
-                {db.classes.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    Kelas: {c.name}
-                  </option>
-                ))}
-              </select>
-            )}
+            <h3 className="text-xl sm:text-2xl font-extrabold text-slate-900 leading-snug mb-3">
+              Aplikasi resmi IJMA sudah resmi rilis
+            </h3>
 
-            {viewerRole === 'teacher' && (
-              <select
-                value={viewerId || db.teachers[0]?.id}
-                onChange={(e) => setViewerId(e.target.value)}
-                className="w-full text-xs font-semibold bg-white border border-slate-300 rounded-xl px-2.5 py-1.5 text-slate-800"
-              >
-                {db.teachers.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.panggilan || t.name}
-                  </option>
-                ))}
-              </select>
-            )}
+            <p className="text-sm text-slate-600 leading-relaxed mb-6">
+              Alhamdulillah bini'matihi tatimmus shaalihaat, aplikasi sistem informasi akademik dan kurikulum terpadu Ma'had IJMA (I'dad Jami'iy Ma'had Asy-Syifa) kini telah resmi dirilis. Pengunjung dapat melihat kalender akademik, jadwal umum, dan direktori referensi kitab ajar melalui menu navigasi di atas.
+            </p>
+
+            <div className="rounded-2xl bg-amber-50/70 border border-amber-200/80 p-4">
+              <div className="flex items-start gap-3">
+                <div className="p-2 rounded-xl bg-amber-100 text-amber-800 shrink-0">
+                  <Bell className="w-4 h-4 text-amber-700" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-amber-900 mb-1">
+                    Pengajuan Akses Ustadz &amp; Santri
+                  </h4>
+                  <p className="text-xs text-amber-800/90 leading-relaxed">
+                    Bagi Guru/Ustadz pengampu atau Santri Ma'had IJMA, silakan gunakan tombol profil di pojok kanan atas untuk mengajukan verifikasi peranan akun Anda kepada Administrator.
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4 max-w-5xl mx-auto">
+      {/* Sticky Viewer Selector & Status Floating Bar */}
+      <div className="sticky p-2 top-26 z-20 bg-slate-900/40 shadow-2xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+
+          {/* Role Switcher: Only for Admin */}
+          {effectiveIsAdmin ? (
+            <div className="bg-slate-50 p-1.5 rounded-2xl border border-slate-200 flex flex-col gap-1.5 shrink-0">
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setViewerRole('student');
+                    if (!viewerId && db.classes.length > 0) setViewerId(db.classes[0].id);
+                  }}
+                  className={`flex-1 px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                    viewerRole === 'student'
+                      ? 'bg-white text-amber-700 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Peserta
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setViewerRole('teacher');
+                    if (!viewerId && db.teachers.length > 0) setViewerId(db.teachers[0].id);
+                  }}
+                  className={`flex-1 px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                    viewerRole === 'teacher'
+                      ? 'bg-white text-amber-700 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Ustadz
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewerRole('admin')}
+                  className={`flex-1 px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                    viewerRole === 'admin'
+                      ? 'bg-white text-amber-700 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Semua
+                </button>
+              </div>
+
+              {/* Selector dropdown for Class or Teacher */}
+              {viewerRole === 'student' && (
+                <select
+                  value={viewerId || db.classes[0]?.id}
+                  onChange={(e) => setViewerId(e.target.value)}
+                  className="w-full text-xs font-semibold bg-white border border-slate-300 rounded-xl px-2.5 py-1.5 text-slate-800"
+                >
+                  {db.classes.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      Kelas: {c.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              {viewerRole === 'teacher' && (
+                <select
+                  value={viewerId || db.teachers[0]?.id}
+                  onChange={(e) => setViewerId(e.target.value)}
+                  className="w-full text-xs font-semibold bg-white border border-slate-300 rounded-xl px-2.5 py-1.5 text-slate-800"
+                >
+                  {db.teachers.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.panggilan || t.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              {auth.role === 'teacher' ? (
+                <div className="flex justify-between">
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 font-bold text-xs">
+                    <span className="w-2 h-2 rounded-full bg-amber-500" />
+                    <span>Halaman Anda: {viewerLabel}</span>
+                  </div>
+                  <span className="text-[8px] text-slate-100 font-mono font-medium">
+                    <p>{clockFormatted} WIB</p><p>{todayFormatted}</p>
+                  </span>
+                </div>
+              ) : auth.role === 'student' ? (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-900 font-bold text-xs">
+                  <span className="w-2 h-2 rounded-full bg-indigo-500" />
+                  <span>Halaman Anda: {viewerLabel}</span>
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Profile Card for Authenticated Teacher or Student before Agenda */}
+      {auth.role === 'teacher' && myTeacher && (
+        <div className="space-y-2">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            <TeacherCard
+              teacher={myTeacher}
+              stats={teacherStats}
+              taughtSubjects={taughtSubjects}
+              summary={summaryMap[myTeacher.id]}
+              onOpenHistory={(teacher) => {
+                setActiveHistoryModal({
+                  personType: 'teacher',
+                  personId: teacher.id,
+                  personName: teacher.name,
+                  personSubtitle: teacher.department || 'Pengajar',
+                  summary: summaryMap[teacher.id]
+                });
+              }}
+              onSelectSchedule={(teacherId) => {
+                if (onSelectTeacherSchedule) {
+                  onSelectTeacherSchedule(teacherId);
+                } else {
+                  onNavigateToSchedule();
+                }
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {auth.role === 'student' && myStudent && (
+        <div className="space-y-2">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            <StudentCard
+              student={myStudent}
+              enrolledClasses={studentEnrolledClasses}
+              summary={summaryMap[myStudent.id]}
+              onOpenHistory={(student) => {
+                setActiveHistoryModal({
+                  personType: 'student',
+                  personId: student.id,
+                  personName: student.name,
+                  personSubtitle: `NISN: ${student.nisn || student.id}`,
+                  summary: summaryMap[student.id]
+                });
+              }}
+              onSelectSchedule={(classId, studentId) => {
+                if (onSelectStudentSchedule) {
+                  onSelectStudentSchedule(classId, studentId);
+                } else {
+                  onNavigateToSchedule();
+                }
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* SEMUA VIEW vs SINGLE VIEW */}
       {viewerRole === 'admin' ? (
@@ -807,11 +1146,11 @@ export const HomeTab: React.FC<HomeTabProps> = ({
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                <h2 className="text-sm font-extrabold uppercase tracking-wider text-white">
+                <h2 className="text-sm font-extrabold uppercase tracking-wider text-slate-800">
                   Berlangsung ({ongoingClassItems.length})
                 </h2>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                 {ongoingClassItems.map(({ cls, currentClass: cCls }) =>
                   renderCurrentClassCard(cCls, cls, `curr-${cls.id}`)
                 )}
@@ -831,7 +1170,7 @@ export const HomeTab: React.FC<HomeTabProps> = ({
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <CalendarCheck2 className="w-4 h-4 text-indigo-600" />
-                <h2 className="text-sm font-extrabold uppercase tracking-wider text-white">
+                <h2 className="text-sm font-extrabold uppercase tracking-wider text-slate-800">
                   Berikutnya ({upcomingClassItems.length})
                 </h2>
               </div>
@@ -843,7 +1182,7 @@ export const HomeTab: React.FC<HomeTabProps> = ({
                 <p className="text-sm font-semibold text-slate-600">Tidak ada jadwal kelas berikutnya</p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                 {upcomingClassItems.slice(0, cardLimit).map(({ cls, nextClass: nCls }) =>
                   renderNextClassCard(nCls, cls, `next-${cls.id}`)
                 )}
@@ -890,7 +1229,7 @@ export const HomeTab: React.FC<HomeTabProps> = ({
           )}
 
           {/* TWO PRIMARY FOCUS CARDS: CURRENT CLASS & NEXT CLASS */}
-          <div className={`grid grid-cols-1 gap-5 ${currentClass ? 'md:grid-cols-2' : ''}`}>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {currentClass && renderCurrentClassCard(currentClass, currentClassEntity)}
             {nextClass
               ? renderNextClassCard(nextClass, nextClassEntity)
@@ -943,6 +1282,152 @@ export const HomeTab: React.FC<HomeTabProps> = ({
           <ArrowRight className="w-4 h-4 text-slate-400 group-hover:text-emerald-600 group-hover:translate-x-1 transition-all" />
         </div>
       </div>
+
+      {/* In-Place Attendance Overlay Modal */}
+      {activeAttendanceOcc && (() => {
+        const { occurrence, units } = activeAttendanceOcc;
+        const meetingId = buildMeetingId(
+          occurrence.date,
+          occurrence.classId,
+          occurrence.sessionId,
+          occurrence.id
+        );
+        const scopedUnits = getScopedUnits(db, occurrence.subjectId, occurrence.classId);
+        const titles = units.map((u) => u.title).join(', ');
+        const lastUnit = units[units.length - 1] || scopedUnits[0];
+        const maxPage = lastUnit?.page_end ?? lastUnit?.page_start;
+        const targetPage = typeof maxPage === 'number' ? maxPage : parseInt(String(maxPage), 10) || undefined;
+        const sessionObj = db.sessions.find((s) => s.id === occurrence.sessionId);
+        const classObj = db.classes.find((c) => c.id === occurrence.classId);
+
+        const parts = occurrence.date.split('-');
+        let formattedDate = occurrence.date;
+        if (parts.length === 3) {
+          const d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+          formattedDate = `${DAY_LABELS[occurrence.day] || occurrence.day}, ${d.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`;
+        }
+
+        const canEditModal = effectiveIsAdmin || auth.canEditSession(occurrence.teacherId);
+
+        return (
+          <AttendanceModal
+            key={meetingId}
+            isAdmin={canEditModal}
+            meetingId={meetingId}
+
+            meetingNumber={occurrence.meetingIndex}
+            isOpen={true}
+            onClose={() => setActiveAttendanceOcc(null)}
+            onSaved={() => setActiveAttendanceOcc(null)}
+            initialDraft={store.getRollCallDraft(meetingId)}
+            onSaveDraft={(payload) => {
+              store.setRollCallDraft(meetingId, payload);
+              if (onUpdateDb) {
+                const numHal =
+                  payload.materialProgress?.hal !== undefined &&
+                  payload.materialProgress.hal !== '' &&
+                  !isNaN(Number(payload.materialProgress.hal))
+                    ? Number(payload.materialProgress.hal)
+                    : undefined;
+                const numStartHal =
+                  payload.materialProgress?.startHal !== undefined &&
+                  payload.materialProgress.startHal !== '' &&
+                  !isNaN(Number(payload.materialProgress.startHal))
+                    ? Number(payload.materialProgress.startHal)
+                    : undefined;
+                const unitId = payload.materialProgress?.unitId;
+                const startUnitId = payload.materialProgress?.startUnitId;
+                const draftMateri = payload.materialProgress?.materi;
+                const draftStartMateri = payload.materialProgress?.startMateri;
+
+                onUpdateDb((prev) => {
+                  const meetings = prev.meetings || [];
+                  const idx = meetings.findIndex((m) => m.id === meetingId);
+                  const updated =
+                    idx !== -1
+                      ? meetings.map((m, i) =>
+                          i === idx
+                            ? {
+                                ...m,
+                                actual_materi_id: unitId || draftMateri,
+                                actual_page: numHal,
+                                actual_start_materi_id: startUnitId || draftStartMateri,
+                                actual_start_page: numStartHal,
+                                notes: payload.meetingNotes,
+                              }
+                            : m
+                        )
+                      : [
+                          ...meetings,
+                          {
+                            id: meetingId,
+                            meeting_date: occurrence.date,
+                            meeting_index: occurrence.meetingIndex,
+                            class_id: occurrence.classId,
+                            subject_id: occurrence.subjectId,
+                            teacher_id: occurrence.teacherId,
+                            room_id: occurrence.roomId,
+                            session_id: occurrence.sessionId,
+                            status: 'scheduled',
+                            actual_materi_id: unitId || draftMateri,
+                            actual_page: numHal,
+                            actual_start_materi_id: startUnitId || draftStartMateri,
+                            actual_start_page: numStartHal,
+                            notes: payload.meetingNotes,
+                          } as any,
+                        ];
+                  return { ...prev, meetings: updated };
+                });
+              }
+            }}
+            onDiscardDraft={() => {
+              store.discardDraft(meetingId);
+              if (onUpdateDb) {
+                onUpdateDb((prev) => {
+                  const meetings = prev.meetings || [];
+                  return {
+                    ...prev,
+                    meetings: meetings.map((m) =>
+                      m.id === meetingId
+                        ? {
+                            ...m,
+                            actual_materi_id: (occurrence as any)?.actual_materi_id ?? (occurrence as any)?.actualMateriId,
+                            actual_page: (occurrence as any)?.actual_page ?? (occurrence as any)?.actualPage,
+                            actual_start_materi_id: (occurrence as any)?.actual_start_materi_id ?? (occurrence as any)?.actualStartMateriId,
+                            actual_start_page: (occurrence as any)?.actual_start_page ?? (occurrence as any)?.actualStartPage,
+                          }
+                        : m
+                    ),
+                  };
+                });
+              }
+            }}
+            getEffectiveStatus={store.getEffectiveStatus}
+            hasDraft={store.isMeetingDrafted(meetingId)}
+            onSetSessionStatus={(id, next) => store.setSessionStatusDraft(id, next)}
+            targetMateri={titles || scopedUnits[0]?.title || undefined}
+            targetHal={targetPage}
+            targetUnitId={units[0]?.id || scopedUnits[0]?.id}
+            availableUnits={scopedUnits}
+            sessionTitle={sessionObj?.name || occurrence.sessionName}
+            classTitle={classObj?.name}
+            formattedDate={formattedDate}
+          />
+        );
+      })()}
+
+      {/* Teacher / Student Attendance History Detail Modal */}
+      {activeHistoryModal && (
+        <AttendanceHistoryModal
+          isOpen={true}
+          onClose={() => setActiveHistoryModal(null)}
+          personType={activeHistoryModal.personType}
+          personId={activeHistoryModal.personId}
+          personName={activeHistoryModal.personName}
+          personSubtitle={activeHistoryModal.personSubtitle}
+          initialSummary={activeHistoryModal.summary}
+        />
+      )}
     </div>
   );
 };

@@ -1,107 +1,107 @@
-# SyllabusTimeline Inspection, Action Deprecation & Pacing Indicator
+# Implementation Plan: Penataan Grid Beranda & Seleksi Peran Terikat di JadwalView
 
-Streamline `SyllabusTimeline.tsx` into a focused, pure read-only progress tracking view by deprecating administrative action buttons, transforming calibration highlights into a minimal icon next to "Materi Target", and introducing a clear header summary comparing actual recorded page progress against target page expectations.
+Penyesuaian tata letak kartu Beranda menjadi grid multi-kolom pada layar lebar, perbaikan akurasi data kartu profil, dan penyesuaian seleksi jadwal di JadwalView agar selalu terikat (*sticky-default*) ke peran pengguna aktif tanpa menyembunyikan pemilih jadwal.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> The following decisions were confirmed by the user:
-> - **Pacing Indicator Placement**: Only as a summary indicator in the header card (not cluttered across individual session cards).
-> - **Pacing Metric Calculation**: Difference in pages between the most recent recorded actual page and the expected target page (`actualPage - targetPage`).
-> - **Action Deprecation**: Retain breadcrumb navigation (`Pelajaran / [Subject] / [Class]`), while completely deprecating and removing all admin action buttons (`Kalibrasi Laju`, `Ubah Rentang Silabus`, admin login triggers, and in-card external link buttons).
-> - **Calibration Indicator Style**: Replace bulky "Terkalibrasi" badges with a minimal, unhighlighted icon (e.g. `SlidersHorizontal` with tooltip) placed quietly right next to the "Materi Target:" label.
+> Penyesuaian berdasarkan arahan terbaru:
+> 1. **Tata Letak Grid Beranda (`HomeTab.tsx`)**: Pada layar lebar (*wide screen*), kartu-kartu di Beranda (kartu profil, kartu kelas berlangsung, kelas berikutnya, dan pintasan) ditata dalam grid 2 atau 3 kolom yang fleksibel dan responsif.
+> 2. **Akurasi & Interaktivitas Kartu Profil**: Statistik beban mengajar dihitung riil dari `db.rules`, kelas terdaftar santri digabung dari `enrolledClassIds` dan `db.enrollments`. Tombol riwayat kehadiran membuka `AttendanceHistoryModal` dan tombol jadwal mengarahkan ke tab Jadwal.
+> 3. **Seleksi Peran di `JadwalView.tsx`**: Pemilih jadwal (*selector*) **tidak disembunyikan**, melainkan otomatis terikat (*sticky-default*) ke peranan dan identitas pengguna yang sedang login (Ustadz $\to$ otomatis terpilih jadwal mengajarnya; Santri $\to$ otomatis terpilih kelasnya; Tamu $\to$ bebas memilih kelas).
+> 4. **Modal Aksi Permintaan Akun (`RoleRequestsView.tsx`)**: Dilewati (*skipped*) sesuai instruksi.
 
 ---
 
 ## 1. Overview & Core Concept
 
-- **What It Does**: Presents a clear, clean, and distraction-free timeline of syllabus pacing. Teachers, students, and administrators can immediately see the schedule and verify whether classroom delivery is ahead, behind, or on track without encountering administrative configuration buttons or overwhelming badges.
-- **Target Audience**: Teachers and academic coordinators reviewing class progress against the syllabus.
-- **Key Value**: Instant clarity on class pacing with minimal visual noise and zero lingering deprecated actions.
+1. **Tata Letak Grid Multi-Kolom di Beranda (`HomeTab.tsx`)**:
+   - Menghilangkan pembungkus sempit statis (`max-w-xl`).
+   - Menerapkan sistem grid responsif: 1 kolom di layar ponsel, 2 kolom di tablet/laptop sedang, dan 3 kolom di layar desktop lebar (`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5`).
+   - Kartu profil Ustadz (`<TeacherCard />`) dan Santri (`<StudentCard />`) menyatu secara proporsional ke dalam grid bersama kartu agenda sesi belajar/mengajar.
+
+2. **Perilaku Seleksi Jadwal Terikat (*Sticky Role Selection*) di `JadwalView.tsx` & `App.tsx`**:
+   - Selektor jadwal tetap terlihat dan dapat diakses, menghindari kesan janggal di mana tamu melihat lebih banyak kontrol daripada guru atau santri.
+   - Namun, sistem secara cerdas mengikat (*sticky*) pilihan awal pengguna:
+     - Jika masuk sebagai **Ustadz**: Mode langsung mengunci ke tampilan Guru (`TEACHER_WEEK`) dengan ID Ustadz bersangkutan sebagai nilai terpilih.
+     - Jika masuk sebagai **Santri**: Mode langsung mengunci ke tampilan Murid (`STUDENT_WEEK`) dengan ID kelas santri sebagai nilai terpilih.
+     - Jika masuk sebagai **Tamu** / **Admin**: Bebas menavigasi kelas maupun guru.
 
 ---
 
 ## 2. User Experience & Visual Design
 
-### Pacing Summary Indicator in Header
-Located in the sticky top header card, beside the existing session/chapter counts:
-- **Ahead of Schedule (`diff > 0`)**: Emerald accent (`+X Hal Lebih Cepat`).
-- **Behind Schedule (`diff < 0`)**: Rose / Amber accent (`-X Hal Tertinggal`).
-- **On Track (`diff === 0`)**: Slate / Emerald subtle accent (`Tepat Target`).
-- **No Progress Recorded Yet**: Muted neutral state (`Belum Ada Catatan Progres`).
+### Alur Tampilan & Interaksi
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ ← Pelajaran / Bahasa Arab / Kelas 7A                                        │
-│                                                                             │
-│ Total: 24 Pertemuan • Cakupan: 6 Bab • Total Halaman: 120 Hal               │
-│ Target: ±5 Hal / Sesi   [ +4 Hal (Lebih Cepat) • Sesi #5 ]                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+1. **Tampilan Beranda di Layar Lebar (`HomeTab.tsx`)**:
+   - **Bar Status Atas**: Tetap *sticky floating* melayang di bawah navbar utama dengan latar blur halus.
+   - **Grid Konten Utama (`lg:grid-cols-3`)**:
+     - *Kolom 1*: Kartu Profil Anda (Ustadz / Santri) dengan metrik kehadiran dan beban mengajar/kelas yang akurat. Bar kehadiran dapat diklik untuk membuka modal riwayat presensi (`AttendanceHistoryModal`), dan tombol "Lihat Jadwal Guru/Santri" langsung membawa ke jadwal terkait.
+     - *Kolom 2*: Kartu Sesi Berlangsung (jika ada kelas aktif saat ini) dengan indikator waktu sisa dan aksi presensi.
+     - *Kolom 3*: Kartu Sesi Berikutnya dengan hitung mundur waktu mulai.
+     - Jika tidak ada kelas berlangsung saat ini, kartu profil dan kelas berikutnya mengisi ruang grid secara seimbang (`md:grid-cols-2 lg:grid-cols-2` atau span kolom).
+   - **Pintasan Cepat**: Grid 2 kolom di bawah agenda untuk menuju ke Jadwal Lengkap dan Jurnal Pembelajaran.
 
-### Minimal Calibration Indicator
-- Remove prominent "Terkalibrasi" amber badges and commented checkpoint banners.
-- When `isAdjusted` is true for a given session, render a clean, understated icon:
-  `Materi Target: <SlidersHorizontal className="w-3 h-3 text-slate-400 inline-block ml-1" title="Laju disesuaikan dari kalibrasi guru" />`
-- Keeps the session card typography clean and uncluttered according to anti-slop guidelines.
-
-### Deprecating Actions
-- Remove:
-  1. Top header "Kalibrasi Laju" button (`onNavigateToSyllabusScope`).
-  2. Top header "Ubah Rentang Silabus" button (`onNavigateToRuleManager`).
-  3. Top header "Masuk admin untuk kalibrasi laju" button (`onOpenAdminLogin`).
-  4. Top header "Telah Disesuaikan Guru" pill badge.
-  5. In-card current session external link button (`onNavigateToSyllabusScope`).
-- Retain:
-  1. Breadcrumb navigation buttons to navigate back to Subjects or Classes.
+2. **Tampilan Bilah Jadwal (`JadwalView.tsx`)**:
+   - Toolbar tetap melayang (*sticky floating*).
+   - Dropdown seleksi tetap hadir sehingga pengguna tidak merasa dibatasi secara artifisial.
+   - Pilihan otomatis (*default*) terisi dan terikat sesuai peranan login pengguna dari profil Turso.
 
 ---
 
-## 3. Key Product Decisions & Trade-Offs
+## 3. Technical Architecture & Component Structure
 
-- **Decision 1: Header-Only Pacing Summary**
-  - *Chosen Approach*: Compute pacing variance once based on the latest recorded meeting (`actual_page`) against its corresponding session target `page_end`.
-  - *Why*: Prevents repetitive badge clutter on every past session card while giving immediate status at a glance.
-  - *Alternatives Considered*: Showing badge on every row was rejected to avoid visual redundancy.
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                              App.tsx                                   │
+│  - Set sticky initial view mode & selected ID based on auth.role       │
+│  - Teacher -> TEACHER_WEEK & teacherId                                 │
+│  - Student -> STUDENT_WEEK & classId                                   │
+└───────────────────┬────────────────────────────────┬───────────────────┘
+                    │                                │
+                    ▼                                ▼
+       ┌────────────────────────┐       ┌─────────────────────────┐
+       │      HomeTab.tsx       │       │    UnifiedStudio.tsx    │
+       │ - Responsive 2/3 col   │       │     & JadwalView.tsx    │
+       │   grid on wide screens │       │ - Selector NOT hidden   │
+       │ - db.rules stats calc  │       │ - Sticky default to     │
+       │ - AttendanceHistory    │       │   user's own role & ID  │
+       │   modal & link working │       │ - Full browsing allowed │
+       └────────────────────────┘       └─────────────────────────┘
+```
 
-- **Decision 2: Quiet Icon Beside "Materi Target"**
-  - *Chosen Approach*: Inline 12px neutral icon (`SlidersHorizontal`) with tooltip.
-  - *Why*: Fulfills the explicit user requirement ("Kalibrasi indicator should only be minimal not highlighted, just make a tiny icon illustrating adjusted next to 'Materi Target'").
+### Rincian Perubahan Berkas
 
-- **Decision 3: Complete Removal of Admin Action Triggers**
-  - *Chosen Approach*: Strip out unused callbacks and buttons in `SyllabusTimeline.tsx`. Keep parent props clean.
-  - *Why*: Eliminates accidental navigation from the review timeline and enforces single-responsibility for this screen.
+1. **`src/components/HomeTab.tsx`**:
+   - Memperbaiki perhitungan statistik `teacherStats`:
+     Mengiterasi `(db.rules || [])`, jika `r.active && r.teacherId === myTeacher.id`, tambahkan `stats.sessions += r.daysOfWeek?.length || 1` dan `stats.subjects.add(r.subjectId)`.
+   - Memperbaiki `studentEnrolledClasses`:
+     Menggabungkan `myStudent.enrolledClassIds` dengan `db.enrollments`.
+   - Menambahkan state `activeHistoryTeacher` dan `activeHistoryStudent` untuk merender `<AttendanceHistoryModal />` saat bar kehadiran diklik pada kartu profil di Beranda.
+   - Menghubungkan `onSelectSchedule` pada kartu profil agar memanggil `onNavigateToSchedule()` dengan ID dan mode yang sesuai.
+   - Mengubah struktur penempatan kartu dari stack vertikal sempit menjadi grid responsif:
+     `<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">` untuk menyajikan kartu profil dan agenda secara berdampingan di layar lebar.
+
+2. **`src/components/JadwalView.tsx` & `src/components/UnifiedStudio.tsx` & `src/App.tsx`**:
+   - Di `App.tsx`:
+     Sinkronisasi peranan: Saat pengguna terverifikasi sebagai Guru, setel `studioViewMode` ke `ScheduleViewMode.TEACHER_WEEK` dan setel `selectedTeacherId` ke `auth.teacherId`. Saat Santri, setel ke `ScheduleViewMode.STUDENT_WEEK` dan `selectedClassId` ke `auth.classId`.
+   - Di `JadwalView.tsx`:
+     Jangan sembunyikan dropdown seleksi (`Kelas:` dan `Guru:`). Biarkan selector tetap dapat diakses oleh semua pengguna (termasuk guru, santri, dan tamu), dengan nilai default yang otomatis terkunci pada identitas pengguna yang sedang masuk.
 
 ---
 
-## 4. Technical Architecture & Implementation Steps
+## 4. Verification Plan
 
-```
-SyllabusTimeline.tsx
-├── Breadcrumb Navigation (Active, retains onBackToSubjects / onBackToClasses)
-├── Header Summary
-│   ├── Total Sessions, Scoped Chapters, Total Pages
-│   ├── Target Pages / Session
-│   └── [NEW] Pacing Status Badge (+X Hal Lebih Cepat / -X Hal Tertinggal / Tepat Target)
-└── Timeline Session Cards
-    ├── Meeting # and Timing Details (Clean metadata, no admin external link)
-    └── Material Column
-        ├── Label: "Materi Target:" [NEW: + Tiny SlidersHorizontal Icon if isAdjusted]
-        └── Unit List (Read-only, clean book metadata & page span)
-```
-
-### Implementation Checklist
-1. **Calculate Pacing Difference in `SyllabusTimeline.tsx`**:
-   - Find latest session in `pacingData.projection` where `session.actual_page && session.actual_page > 0`.
-   - Compare `session.actual_page` with target end page (`item.units[item.units.length - 1]?.page_end`).
-   - Derive difference: `diff = actualPage - targetEndPage`.
-   - Render pacing pill in the header metadata row.
-2. **Remove Deprecated Actions**:
-   - Remove header action buttons container (lines 137–192).
-   - Remove card-level external link button (lines 415–432).
-   - Clean up unused imports (`CheckCircle2` if only used in deprecated badges, etc.).
-3. **Minimize Calibration Indicator**:
-   - Remove the `Terkalibrasi` pill badge from lines 395–403.
-   - Insert `<SlidersHorizontal className="w-3 h-3 text-slate-400 inline ml-1" />` next to `"Materi Target:"` when `isAdjusted` is true.
-4. **Compile & Lint Check**:
-   - Run `compile_applet` and `lint_applet` to verify clean build without broken props or unused variables.
+1. **Verifikasi Responsivitas Grid di Beranda**:
+   - Buka Beranda pada resolusi layar lebar (> 1024px) $\to$ verifikasi kartu profil, sesi berjalan, dan sesi berikutnya tertata dalam grid 2-3 kolom rapi tanpa terpotong.
+   - Buka pada resolusi ponsel (< 640px) $\to$ verifikasi kartu otomatis stack 1 kolom dengan padding yang nyaman.
+2. **Verifikasi Akurasi Data & Tombol Kartu**:
+   - Login Ustadz $\to$ cek jumlah sesi per pekan dan mata pelajaran sesuai jadwal aktif di database.
+   - Klik persentase kehadiran $\to$ modal riwayat kehadiran muncul dan menampilkan sesi yang sesuai.
+   - Klik "Lihat Jadwal Guru $\to$" $\to$ navigasi berpindah ke tab Jadwal menampilkan jadwal guru tersebut.
+3. **Verifikasi JadwalView**:
+   - Login Ustadz $\to$ tab Jadwal otomatis membuka jadwal mengajar Ustadz, dan dropdown seleksi tetap ada dan dapat digunakan.
+   - Login Santri $\to$ tab Jadwal otomatis membuka jadwal kelas santri.
+   - Tamu $\to$ tab Jadwal dapat memilih kelas yang ingin dilihat.
+4. **Verifikasi Kompilasi & Build**:
+   - Jalankan `compile_applet` dan `lint_applet` bersamaan untuk memastikan 0 error TypeScript.

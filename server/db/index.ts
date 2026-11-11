@@ -43,9 +43,9 @@ let isTursoAvailable = false;
 // ----------------------------------------------------------------------------
 // SQL Schemas (Imported from schemas.ts)
 // ----------------------------------------------------------------------------
-import { METADATA_SCHEMA_SQL, KALDIK_SCHEMA_SQL, ATTENDANCE_SCHEMA_SQL, UNIFIED_SCHEMA_SQL } from './schemas.ts';
+import { METADATA_SCHEMA_SQL, KALDIK_SCHEMA_SQL, ATTENDANCE_SCHEMA_SQL, AUTH_SCHEMA_SQL, UNIFIED_SCHEMA_SQL } from './schemas.ts';
 import { seedInitialStudentsIfEmpty, saveAllEnrollmentData, syncAttendanceOptimizationData } from './attendance.ts';
-export { METADATA_SCHEMA_SQL, KALDIK_SCHEMA_SQL, ATTENDANCE_SCHEMA_SQL, UNIFIED_SCHEMA_SQL };
+export { METADATA_SCHEMA_SQL, KALDIK_SCHEMA_SQL, ATTENDANCE_SCHEMA_SQL, AUTH_SCHEMA_SQL, UNIFIED_SCHEMA_SQL };
 
 // Helper: split multi-statement SQL into individual statements for Turso compatibility
 function splitStatements(sql: string): string[] {
@@ -66,8 +66,13 @@ async function ensureTursoSchemas() {
       console.warn('⚠️ [Turso] Base schema verification note:', err.message);
     }
 
-    // Idempotent migration for helper columns on attnd_meeting
+    // Idempotent migration for helper columns on attnd_meeting and students
     const helperColumns = [
+      'ALTER TABLE students ADD COLUMN email TEXT',
+      'ALTER TABLE app_users ADD COLUMN requested_role TEXT',
+      'ALTER TABLE app_users ADD COLUMN requested_person_id TEXT',
+      'ALTER TABLE app_users ADD COLUMN request_status TEXT DEFAULT "none"',
+      'ALTER TABLE app_users ADD COLUMN requested_at DATETIME',
       'ALTER TABLE attnd_meeting ADD COLUMN present_count INTEGER DEFAULT 0',
       'ALTER TABLE attnd_meeting ADD COLUMN absent_count INTEGER DEFAULT 0',
       'ALTER TABLE attnd_meeting ADD COLUMN enrolled_count INTEGER DEFAULT 0',
@@ -77,7 +82,13 @@ async function ensureTursoSchemas() {
       'ALTER TABLE attnd_meeting ADD COLUMN target_page_range TEXT',
       'ALTER TABLE attnd_meeting ADD COLUMN actual_materi_id TEXT',
       'ALTER TABLE attnd_meeting ADD COLUMN actual_page INTEGER',
+      'ALTER TABLE attnd_meeting ADD COLUMN actual_start_materi_id TEXT',
+      'ALTER TABLE attnd_meeting ADD COLUMN actual_start_page INTEGER',
+      'ALTER TABLE kaldik_events ADD COLUMN is_recurring INTEGER DEFAULT 0',
+      'ALTER TABLE kaldik_events ADD COLUMN days_of_week TEXT',
+      'ALTER TABLE kaldik_events ADD COLUMN repeat_detail TEXT DEFAULT "Weekly"',
     ];
+
 
     for (const sql of helperColumns) {
       try {
@@ -89,6 +100,7 @@ async function ensureTursoSchemas() {
 
     // Idempotent covering indexes
     const helperIndexes = [
+      'CREATE INDEX IF NOT EXISTS idx_users_request_status ON app_users(request_status)',
       'CREATE INDEX IF NOT EXISTS idx_meeting_date_session_order ON attnd_meeting(meeting_date, session_id, status)',
       'CREATE INDEX IF NOT EXISTS idx_meeting_class_subj_date ON attnd_meeting(class_id, subject_id, meeting_date, status)',
       'CREATE INDEX IF NOT EXISTS idx_meeting_class_subj_actual_page ON attnd_meeting(class_id, subject_id, actual_page)',
@@ -544,20 +556,33 @@ function mapKaldikRows(
     description: p.description,
   }));
 
-  const kaldikEvents: KaldikEvent[] = rawEvents.map((e) => ({
-    id: e.code,
-    title: e.title,
-    isKbm: Boolean(e.is_kbm),
-    type: e.type,
-    isAllDay: Boolean(e.is_all_day),
-    startDate: e.start_date,
-    endDate: e.end_date,
-    startTime: e.start_time,
-    endTime: e.end_time,
-    periodId: e.period_code,
-    color: e.color,
-    description: e.description,
-  }));
+  const kaldikEvents: KaldikEvent[] = rawEvents.map((e) => {
+    let daysOfWeek: DayOfWeek[] | undefined;
+    if (e.days_of_week) {
+      try {
+        daysOfWeek = typeof e.days_of_week === 'string' ? JSON.parse(e.days_of_week) : e.days_of_week;
+      } catch {
+        daysOfWeek = undefined;
+      }
+    }
+    return {
+      id: e.code,
+      title: e.title,
+      isKbm: Boolean(e.is_kbm),
+      type: e.type,
+      isAllDay: Boolean(e.is_all_day),
+      startDate: e.start_date,
+      endDate: e.end_date,
+      startTime: e.start_time,
+      endTime: e.end_time,
+      isRecurring: Boolean(e.is_recurring),
+      daysOfWeek,
+      repeatDetail: e.repeat_detail || 'Weekly',
+      periodId: e.period_code,
+      color: e.color,
+      description: e.description,
+    };
+  });
 
   const rulePeriodsMap = new Map<string, string[]>();
   for (const rp of rawRulePeriods) {
@@ -814,7 +839,7 @@ export async function getDatabaseState(forceRefresh = false): Promise<DatabaseSt
   } catch {}
   try {
     const mRes = await tursoClient.execute(
-      'SELECT id, meeting_date, meeting_index, class_id, subject_id, teacher_id, room_id, session_id, rule_code, status, notes, actual_materi_id, actual_page, target_unit_id, target_page_range FROM attnd_meeting ORDER BY meeting_date ASC, session_id ASC'
+      'SELECT id, meeting_date, meeting_index, class_id, subject_id, teacher_id, room_id, session_id, rule_code, status, notes, actual_materi_id, actual_page, actual_start_materi_id, actual_start_page, target_unit_id, target_page_range FROM attnd_meeting ORDER BY meeting_date ASC, session_id ASC'
     );
     meetingsRows = mRes.rows as any[];
   } catch {}
@@ -849,6 +874,8 @@ export async function getDatabaseState(forceRefresh = false): Promise<DatabaseSt
     status: (m.status as any) || 'scheduled',
     actual_materi_id: m.actual_materi_id ? String(m.actual_materi_id) : undefined,
     actual_page: m.actual_page !== null && m.actual_page !== undefined ? Number(m.actual_page) : undefined,
+    actual_start_materi_id: m.actual_start_materi_id ? String(m.actual_start_materi_id) : undefined,
+    actual_start_page: m.actual_start_page !== null && m.actual_start_page !== undefined ? Number(m.actual_start_page) : undefined,
     notes: m.notes ? String(m.notes) : undefined,
     target_unit_id: m.target_unit_id ? String(m.target_unit_id) : undefined,
     target_page_range: m.target_page_range ? String(m.target_page_range) : undefined,
@@ -913,8 +940,8 @@ async function saveTursoKaldik(client: Client, state: DatabaseState) {
     statements.push({ sql: 'DELETE FROM kaldik_events' });
     for (const evt of state.kaldikEvents) {
       statements.push({
-        sql: `INSERT INTO kaldik_events (code, title, is_kbm, type, is_all_day, start_date, end_date, start_time, end_time, period_code, color, description, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        sql: `INSERT INTO kaldik_events (code, title, is_kbm, type, is_all_day, start_date, end_date, start_time, end_time, is_recurring, days_of_week, repeat_detail, period_code, color, description, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
               ON CONFLICT(code) DO UPDATE SET
                 title = excluded.title,
                 is_kbm = excluded.is_kbm,
@@ -924,6 +951,9 @@ async function saveTursoKaldik(client: Client, state: DatabaseState) {
                 end_date = excluded.end_date,
                 start_time = excluded.start_time,
                 end_time = excluded.end_time,
+                is_recurring = excluded.is_recurring,
+                days_of_week = excluded.days_of_week,
+                repeat_detail = excluded.repeat_detail,
                 period_code = excluded.period_code,
                 color = excluded.color,
                 description = excluded.description,
@@ -938,6 +968,9 @@ async function saveTursoKaldik(client: Client, state: DatabaseState) {
           evt.endDate || '',
           evt.startTime || null,
           evt.endTime || null,
+          evt.isRecurring ? 1 : 0,
+          evt.daysOfWeek ? JSON.stringify(evt.daysOfWeek) : null,
+          evt.repeatDetail || 'Weekly',
           evt.periodId || null,
           evt.color || null,
           evt.description || null,

@@ -29,7 +29,17 @@ import {
   deleteStudentRecord,
   saveAllEnrollmentData,
   generateAllRuleMeetings,
+  getAttendanceSummary,
+  getPersonAttendanceHistory,
 } from './server/db/attendance.ts';
+import {
+  syncUserWithTurso,
+  getUserProfileByUid,
+  requestUserRole,
+  getPendingRoleRequests,
+  approveRoleRequest,
+  rejectRoleRequest,
+} from './server/db/auth.ts';
 
 const app = express();
 const PORT = 3000;
@@ -96,8 +106,9 @@ async function requireDatabaseReady(req: express.Request, res: express.Response,
   }
 }
 
-// Gate all DB and attendance endpoints until Turso connection succeeds
-app.use(['/api/database', '/api/attendance', '/api/enrollment'], requireDatabaseReady);
+// Gate all DB, auth, and attendance endpoints until Turso connection succeeds
+app.use(['/api/database', '/api/attendance', '/api/enrollment', '/api/auth'], requireDatabaseReady);
+
 
 // Primary data endpoints for Portal Akademik (Turso Cloud SQL + SQLite fallback)
 app.get('/api/database', async (req, res) => {
@@ -147,6 +158,110 @@ app.post('/api/database/reset', async (req, res) => {
   } catch (err: any) {
     console.error('Database reset error:', err);
     res.status(500).json({ error: 'Failed to reset database', details: err?.message });
+  }
+});
+
+// ============================================================================
+// Authentication & Mirroring Endpoints (Firebase Auth + Turso Source of Truth)
+// ============================================================================
+app.post('/api/auth/sync', async (req, res) => {
+  if (!tursoClient) {
+    return res.status(503).json({ error: 'Turso database is offline' });
+  }
+  const { uid, email, displayName, photoURL } = req.body || {};
+  if (!uid || !email) {
+    return res.status(400).json({ error: 'Missing uid or email' });
+  }
+  try {
+    const profile = await syncUserWithTurso(tursoClient, { uid, email, displayName, photoURL });
+    res.json({ success: true, profile });
+  } catch (err: any) {
+    console.error('Failed to sync auth user:', err);
+    res.status(500).json({ error: 'Failed to sync user', details: err?.message });
+  }
+});
+
+app.get('/api/auth/profile/:uid', async (req, res) => {
+  if (!tursoClient) {
+    return res.status(503).json({ error: 'Turso database is offline' });
+  }
+  const { uid } = req.params;
+  try {
+    const profile = await getUserProfileByUid(tursoClient, uid);
+    if (!profile) {
+      return res.status(404).json({ error: 'Profile not found' });
+    }
+    res.json({ success: true, profile });
+  } catch (err: any) {
+    console.error('Failed to get auth profile:', err);
+    res.status(500).json({ error: 'Failed to get profile', details: err?.message });
+  }
+});
+
+app.post('/api/auth/request-role', async (req, res) => {
+  if (!tursoClient) {
+    return res.status(503).json({ error: 'Turso database is offline' });
+  }
+  const { uid, requestedRole, requestedPersonId } = req.body || {};
+  if (!uid || !requestedRole || !requestedPersonId) {
+    return res.status(400).json({ error: 'Field uid, requestedRole, dan requestedPersonId wajib diisi.' });
+  }
+  if (!['teacher', 'student'].includes(requestedRole)) {
+    return res.status(400).json({ error: 'Peran yang diminta harus teacher atau student.' });
+  }
+  try {
+    const profile = await requestUserRole(tursoClient, uid, requestedRole, requestedPersonId);
+    res.json({ success: true, profile });
+  } catch (err: any) {
+    console.error('Failed to request role:', err);
+    res.status(400).json({ error: err.message || 'Gagal mengajukan peran akun' });
+  }
+});
+
+app.get('/api/auth/pending-requests', async (req, res) => {
+  if (!tursoClient) {
+    return res.status(503).json({ error: 'Turso database is offline' });
+  }
+  try {
+    const result = await getPendingRoleRequests(tursoClient);
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    console.error('Failed to get pending role requests:', err);
+    res.status(500).json({ error: 'Gagal mengambil daftar pengajuan peran', details: err?.message });
+  }
+});
+
+app.post('/api/auth/approve-request', async (req, res) => {
+  if (!tursoClient) {
+    return res.status(503).json({ error: 'Turso database is offline' });
+  }
+  const { targetUid } = req.body || {};
+  if (!targetUid) {
+    return res.status(400).json({ error: 'Field targetUid wajib diisi.' });
+  }
+  try {
+    const result = await approveRoleRequest(tursoClient, targetUid);
+    res.json(result);
+  } catch (err: any) {
+    console.error('Failed to approve role request:', err);
+    res.status(400).json({ error: err.message || 'Gagal menyetujui pengajuan' });
+  }
+});
+
+app.post('/api/auth/reject-request', async (req, res) => {
+  if (!tursoClient) {
+    return res.status(503).json({ error: 'Turso database is offline' });
+  }
+  const { targetUid } = req.body || {};
+  if (!targetUid) {
+    return res.status(400).json({ error: 'Field targetUid wajib diisi.' });
+  }
+  try {
+    const result = await rejectRoleRequest(tursoClient, targetUid);
+    res.json(result);
+  } catch (err: any) {
+    console.error('Failed to reject role request:', err);
+    res.status(400).json({ error: err.message || 'Gagal menolak pengajuan' });
   }
 });
 
@@ -294,6 +409,40 @@ app.post('/api/attendance/generate-all-meetings', async (_req, res) => {
   } catch (err: any) {
     console.error('Failed to generate meetings:', err);
     res.status(500).json({ error: 'Failed to generate meetings', details: err?.message });
+  }
+});
+
+app.get('/api/attendance/summary', async (req, res) => {
+  if (!tursoClient) {
+    return res.status(503).json({ error: 'Turso database is offline' });
+  }
+  const personType = (req.query.type as string) === 'teacher' ? 'teacher' : 'student';
+  const month = req.query.month ? String(req.query.month) : undefined;
+  try {
+    const summary = await getAttendanceSummary(tursoClient, personType, month);
+    res.json(summary);
+  } catch (err: any) {
+    console.error('Failed to get attendance summary:', err);
+    res.status(500).json({ error: 'Failed to get attendance summary', details: err?.message });
+  }
+});
+
+app.get('/api/attendance/person-history', async (req, res) => {
+  if (!tursoClient) {
+    return res.status(503).json({ error: 'Turso database is offline' });
+  }
+  const personType = (req.query.personType as string) === 'teacher' ? 'teacher' : 'student';
+  const personId = String(req.query.personId || '');
+  if (!personId) {
+    return res.status(400).json({ error: 'Missing personId parameter' });
+  }
+  const month = req.query.month ? String(req.query.month) : undefined;
+  try {
+    const history = await getPersonAttendanceHistory(tursoClient, personType, personId, month);
+    res.json(history);
+  } catch (err: any) {
+    console.error('Failed to get person attendance history:', err);
+    res.status(500).json({ error: 'Failed to get person attendance history', details: err?.message });
   }
 });
 

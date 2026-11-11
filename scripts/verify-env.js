@@ -21,7 +21,7 @@ const CRITICAL_PACKAGES = [
 ];
 
 function checkEnvironment() {
-  console.log('[verify-env] Verifying development environment & binaries...');
+  console.log('[verify-env] Verifying development environment & dependencies...');
 
   // 1. Remove obsolete or conflicting lockfiles if present
   const bunLock = path.join(rootDir, 'bun.lock');
@@ -39,7 +39,19 @@ function checkEnvironment() {
     } catch (_) {}
   }
 
-  // 2. Check if .bin executables exist
+  // 2. Ensure .env exists if .env.example is present
+  const envFile = path.join(rootDir, '.env');
+  const envExampleFile = path.join(rootDir, '.env.example');
+  if (!fs.existsSync(envFile) && fs.existsSync(envExampleFile)) {
+    try {
+      fs.copyFileSync(envExampleFile, envFile);
+      console.log('[verify-env] Created .env from .env.example.');
+    } catch (e) {
+      console.warn('[verify-env] Could not auto-create .env:', e.message);
+    }
+  }
+
+  // 3. Check if .bin executables exist
   let missing = false;
   for (const binPath of CRITICAL_BINARIES) {
     if (!fs.existsSync(binPath)) {
@@ -48,16 +60,29 @@ function checkEnvironment() {
     }
   }
 
-  // 3. Check if critical package modules exist
-  for (const pkg of CRITICAL_PACKAGES) {
-    const pkgDir = path.join(rootDir, 'node_modules', ...pkg.split('/'));
-    if (!fs.existsSync(pkgDir)) {
-      console.warn(`[verify-env] Missing package directory: ${pkgDir}`);
-      missing = true;
+  // 4. Dynamically check all packages listed in package.json dependencies & devDependencies
+  try {
+    const pkgJsonPath = path.join(rootDir, 'package.json');
+    if (fs.existsSync(pkgJsonPath)) {
+      const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+      const allDeps = {
+        ...(pkgJson.dependencies || {}),
+        ...(pkgJson.devDependencies || {}),
+      };
+      for (const depName of Object.keys(allDeps)) {
+        const depDir = path.join(rootDir, 'node_modules', ...depName.split('/'));
+        if (!fs.existsSync(depDir)) {
+          console.warn(`[verify-env] Missing dependency: ${depName}`);
+          missing = true;
+          break; // One missing is enough to trigger repair
+        }
+      }
     }
+  } catch (err) {
+    console.warn('[verify-env] Could not parse package.json for dependency check:', err.message);
   }
 
-  // 4. Auto-repair if anything is missing
+  // 5. Auto-repair if anything is missing
   if (missing) {
     console.log('[verify-env] Dependencies or binaries missing. Executing npm install self-healing...');
     try {

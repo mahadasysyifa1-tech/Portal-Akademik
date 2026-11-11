@@ -4,14 +4,15 @@ import { detectConflicts } from './utils/scheduleEngine';
 import { normalizeDatabaseState, normalizeRule } from './utils/normalize';
 import { Header, ActiveTabType, DatabaseSubTab } from './components/Header';
 import { UnifiedStudio } from './components/UnifiedStudio';
-import { ScheduleViewMode } from './components/CalendarView';
+import { ScheduleViewMode } from './components/JadwalView';
 import { SubjectsDirectory } from './components/directory/SubjectsDirectory';
 import { BooksDirectory } from './components/directory/BooksDirectory';
 import { TeachersDirectory } from './components/directory/TeachersDirectory';
+import { StudentsDirectory } from './components/directory/StudentsDirectory';
 import { ConflictCenter } from './components/ConflictCenter';
 import { EntityManager } from './components/EntityManager';
 import { RuleModal } from './components/RuleModal';
-import { AdminLoginModal } from './components/AdminLoginModal';
+import { AuthGate } from './components/AuthGate';
 import { HomeTab } from './components/HomeTab';
 import { SyllabusView } from './components/SyllabusView';
 import { ExportImportView } from './components/ExportImportView';
@@ -21,8 +22,10 @@ import { RuleManagerView } from './components/ruleManager/RuleManagerView';
 import { parseUrlRoute, updateUrlRoute } from './utils/routing';
 import { useAttendancePendingStore } from './utils/useAttendancePendingStore';
 import type { ViewerRole } from './types/viewer';
+import { useAuth } from './context/AuthContext';
 
 const defaultEmptyDb: DatabaseState = {
+
   classes: [],
   teachers: [],
   rooms: [],
@@ -65,20 +68,34 @@ export default function App() {
     return normalizeDatabaseState(defaultEmptyDb);
   });
 
-  const [isAdmin, setIsAdmin] = useState<boolean>(() => {
+  // Permanently purge any residual legacy admin flag from browser localStorage
+  useEffect(() => {
     try {
-      return localStorage.getItem('ijma_admin_auth') === 'true';
-    } catch {
-      return false;
-    }
-  });
+      localStorage.removeItem('ijma_admin_auth');
+    } catch {}
+  }, []);
 
-  const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
+  const auth = useAuth();
+  const effectiveIsAdmin = auth.isAdmin;
+
   const [databaseSubTab, setDatabaseSubTab] = useState<DatabaseSubTab>('classes');
   const [isSaving, setIsSaving] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const attendancePendingStore = useAttendancePendingStore();
   const combinedIsDirty = isDirty || attendancePendingStore.isDirty;
+
+  const draftItems = useMemo(() => {
+    const items: string[] = [];
+    if (attendancePendingStore.pendingCount > 0) {
+      items.push(`presensi (${attendancePendingStore.pendingCount} sesi)`);
+    } else if (attendancePendingStore.isDirty) {
+      items.push('presensi');
+    }
+    if (isDirty) {
+      items.push('jadwal/database');
+    }
+    return items;
+  }, [attendancePendingStore.pendingCount, attendancePendingStore.isDirty, isDirty]);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>({ kind: 'idle' });
   const [cloudLoad, setCloudLoad] = useState<'loading' | 'ok' | 'failed'>('loading');
   const editVersion = useRef(0);
@@ -112,6 +129,21 @@ export default function App() {
     } catch {}
     return '';
   });
+
+  // Automatically align viewerRole and viewerId with authenticated teacher or student identity from Turso
+  useEffect(() => {
+    if (auth.isTeacher && auth.teacherId) {
+      setViewerRole('teacher');
+      setViewerId(auth.teacherId);
+      setStudioViewMode(ScheduleViewMode.TEACHER_WEEK);
+      setStudioSelectedTeacherId(auth.teacherId);
+    } else if (auth.isStudent && auth.classId) {
+      setViewerRole('student');
+      setViewerId(auth.classId);
+      setStudioViewMode(ScheduleViewMode.STUDENT_WEEK);
+      setStudioSelectedClassId(auth.classId);
+    }
+  }, [auth.isTeacher, auth.teacherId, auth.isStudent, auth.classId]);
 
   // Unified Studio schedule view state (persisted across rule edits, navigation, and reloads)
   const [studioViewMode, setStudioViewMode] = useState<ScheduleViewMode>(() => {
@@ -212,6 +244,12 @@ export default function App() {
     setActiveTab('kaldik');
   };
 
+  const handleNavigateToSyllabus = (subjectId?: string, classId?: string, date?: string) => {
+    setJournalNavParams({ subjectId, classId, date });
+    setActiveTab('syllabus');
+    updateUrlRoute('syllabus', viewerRole, viewerId, 'push');
+  };
+
   const handleNavigateToBooks = (bookId?: string) => {
     if (bookId) {
       setSelectedBookId(bookId);
@@ -237,6 +275,19 @@ export default function App() {
     setJournalNavParams(null);
     setSelectedBookId(null);
     setSelectedSubjectId(null);
+    if (tab === 'studio') {
+      if (auth.isTeacher && auth.teacherId) {
+        setStudioViewMode(ScheduleViewMode.TEACHER_WEEK);
+        setStudioSelectedTeacherId(auth.teacherId);
+        setViewerRole('teacher');
+        setViewerId(auth.teacherId);
+      } else if (auth.isStudent && auth.classId) {
+        setStudioViewMode(ScheduleViewMode.STUDENT_WEEK);
+        setStudioSelectedClassId(auth.classId);
+        setViewerRole('student');
+        setViewerId(auth.classId);
+      }
+    }
     setActiveTab(tab);
     updateUrlRoute(tab, viewerRole, viewerId, 'push', tab === 'studio' ? studioViewMode : undefined);
   };
@@ -248,6 +299,31 @@ export default function App() {
       setActiveTab('kaldik');
     }
   }, [activeTab]);
+
+  // Role-based route guard:
+  // - guest: const allowedNonAdminTabs: ActiveTabType[] = ['home', 'studio', 'kaldik', 'books', 'teachers'];
+  // - student: ro all pages (except admin pages in submenu: rule-manager, database, conflicts, export-import)
+  // - teacher: student + personal attndmodal permission
+  // - admin: full access
+  useEffect(() => {
+    if (!auth.isAuthenticated) return;
+
+    if (auth.role === 'guest') {
+      const allowedNonAdminTabs: ActiveTabType[] = ['home', 'studio', 'kaldik', 'books', 'teachers'];
+      if (!allowedNonAdminTabs.includes(activeTab)) {
+        setActiveTab('studio');
+      }
+      if (kaldikMode === 'jurnal') {
+        setKaldikMode('kaldik');
+      }
+    } else if (!effectiveIsAdmin) {
+      // student & teacher: access to all normal pages except the 4 admin submenus
+      const adminOnlyTabs: ActiveTabType[] = ['rule-manager', 'database', 'conflicts', 'export-import'];
+      if (adminOnlyTabs.includes(activeTab)) {
+        setActiveTab('studio');
+      }
+    }
+  }, [auth.isAuthenticated, auth.role, effectiveIsAdmin, activeTab, kaldikMode]);
 
   // Sync token in localStorage & URL
   useEffect(() => {
@@ -298,7 +374,27 @@ export default function App() {
       });
   }, []);
 
-  // Ensure viewerId stays valid when classes or teachers change
+  // Keep db.meetings in sync whenever attendance or meetings are updated
+  useEffect(() => {
+    const handleAttendanceSaved = () => {
+      fetch('/api/database')
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then((data: any) => {
+          if (data && Array.isArray(data.meetings)) {
+            setDb((prev) => ({
+              ...prev,
+              meetings: data.meetings,
+            }));
+          }
+        })
+        .catch((err) => console.warn('Failed to refresh meetings on attendance:saved', err));
+    };
+    window.addEventListener('attendance:saved', handleAttendanceSaved);
+    return () => window.removeEventListener('attendance:saved', handleAttendanceSaved);
+  }, []);
   useEffect(() => {
     if (viewerRole === 'student') {
       const valid = db.classes.some((c) => c.id === viewerId);
@@ -318,18 +414,74 @@ export default function App() {
   }, [db.classes, db.teachers, viewerRole, viewerId]);
 
   // Sync save to server and local cache
-  const saveDatabase = useCallback((newDb: DatabaseState) => {
-    const normalized = normalizeDatabaseState(newDb);
-    setDb(normalized);
-    editVersion.current += 1;
-    setIsDirty(true);
-    setSaveStatus({ kind: 'idle' });
-    try {
-      localStorage.setItem('school_schedule_db', JSON.stringify(normalized));
-    } catch (e) {
-      console.warn('Local storage error', e);
-    }
+  const saveDatabase = useCallback((newDb: DatabaseState | ((prev: DatabaseState) => DatabaseState)) => {
+    setDb((prev) => {
+      const nextDb = typeof newDb === 'function' ? newDb(prev) : newDb;
+
+      // Check if this update only modified in-memory meetings cache or unchanged structural state
+      const isStructuralUnchanged =
+        (nextDb.rules === prev.rules || (nextDb.rules?.length === prev.rules?.length && JSON.stringify(nextDb.rules) === JSON.stringify(prev.rules))) &&
+        (nextDb.classes === prev.classes || (nextDb.classes?.length === prev.classes?.length && JSON.stringify(nextDb.classes) === JSON.stringify(prev.classes))) &&
+        (nextDb.teachers === prev.teachers || (nextDb.teachers?.length === prev.teachers?.length && JSON.stringify(nextDb.teachers) === JSON.stringify(prev.teachers))) &&
+        (nextDb.subjects === prev.subjects || (nextDb.subjects?.length === prev.subjects?.length && JSON.stringify(nextDb.subjects) === JSON.stringify(prev.subjects))) &&
+        (nextDb.rooms === prev.rooms || (nextDb.rooms?.length === prev.rooms?.length && JSON.stringify(nextDb.rooms) === JSON.stringify(prev.rooms))) &&
+        (nextDb.periods === prev.periods || (nextDb.periods?.length === prev.periods?.length && JSON.stringify(nextDb.periods) === JSON.stringify(prev.periods))) &&
+        (nextDb.sessions === prev.sessions || (nextDb.sessions?.length === prev.sessions?.length && JSON.stringify(nextDb.sessions) === JSON.stringify(prev.sessions))) &&
+        (nextDb.kaldikEvents === prev.kaldikEvents || (nextDb.kaldikEvents?.length === prev.kaldikEvents?.length && JSON.stringify(nextDb.kaldikEvents) === JSON.stringify(prev.kaldikEvents))) &&
+        (nextDb.books === prev.books || (nextDb.books?.length === prev.books?.length && JSON.stringify(nextDb.books) === JSON.stringify(prev.books))) &&
+        (nextDb.syllabusUnits === prev.syllabusUnits || (nextDb.syllabusUnits?.length === prev.syllabusUnits?.length && JSON.stringify(nextDb.syllabusUnits) === JSON.stringify(prev.syllabusUnits))) &&
+        (nextDb.syllabusScopes === prev.syllabusScopes || (nextDb.syllabusScopes?.length === prev.syllabusScopes?.length && JSON.stringify(nextDb.syllabusScopes) === JSON.stringify(prev.syllabusScopes))) &&
+        (nextDb.students === prev.students || (nextDb.students?.length === prev.students?.length && JSON.stringify(nextDb.students) === JSON.stringify(prev.students))) &&
+        (nextDb.enrollments === prev.enrollments || (nextDb.enrollments?.length === prev.enrollments?.length && JSON.stringify(nextDb.enrollments) === JSON.stringify(prev.enrollments))) &&
+        (nextDb.materials === prev.materials || (nextDb.materials?.length === prev.materials?.length && JSON.stringify(nextDb.materials) === JSON.stringify(prev.materials)));
+
+      if (isStructuralUnchanged) {
+        // Purely local meetings or unchanged structural state: update meetings in state without marking database as dirty
+        return {
+          ...prev,
+          meetings: nextDb.meetings,
+        };
+      }
+
+      // Structural database entity changed (rules, classes, subjects, kaldikEvents, etc.)
+      const normalized = normalizeDatabaseState(nextDb);
+      editVersion.current += 1;
+      setIsDirty(true);
+      setSaveStatus({ kind: 'idle' });
+      try {
+        localStorage.setItem('school_schedule_db', JSON.stringify(normalized));
+      } catch (e) {
+        console.warn('Local storage error', e);
+      }
+      return normalized;
+    });
   }, []);
+
+  // Global discard drafts handler
+  const handleDiscardAllDrafts = useCallback(() => {
+    // 1. Clear attendance pending drafts
+    attendancePendingStore.clearDrafts();
+
+    // 2. Clear database dirty flag and reload clean state from Turso
+    setIsDirty(false);
+    setSaveStatus({ kind: 'idle' });
+
+    fetch('/api/database')
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data: any) => {
+        if (data && data.subjects && data.subjects.length > 0) {
+          const normalized = normalizeDatabaseState(data);
+          setDb(normalized);
+          try {
+            localStorage.setItem('school_schedule_db', JSON.stringify(normalized));
+          } catch {}
+        }
+      })
+      .catch((err) => console.warn('Failed to refresh database on discard', err));
+  }, [attendancePendingStore]);
 
   // SAVE and WARNING
   // Actual save function
@@ -348,11 +500,12 @@ export default function App() {
   });
 
   const handleSaveToCloud = async () => {
-    if (!isAdmin) {
-      setIsAdminModalOpen(true);
+    // Both admin and teachers with pending attendance drafts can save
+    if (!effectiveIsAdmin && !attendancePendingStore.isDirty) {
       return;
     }
-    if (cloudLoad !== 'ok') {
+
+    if (effectiveIsAdmin && isDirty && cloudLoad !== 'ok') {
       setSaveStatus({
         kind: 'error',
         message: 'Data awal belum berhasil dimuat dari Turso. Muat ulang halaman dulu agar data cloud tidak tertimpa cache lama.'
@@ -361,7 +514,6 @@ export default function App() {
     }
 
     const snapshot = normalizeDatabaseState(db);
-    const versionAtSave = editVersion.current;
     setIsSaving(true);
     setSaveStatus({ kind: 'saving' });
 
@@ -392,8 +544,7 @@ export default function App() {
 
         actualCounts = actual;
         savedTimestamp = body.savedAt || savedTimestamp;
-        // Only clear "dirty" if nothing was edited while the save was in flight
-        if (editVersion.current === versionAtSave) setIsDirty(false);
+        setIsDirty(false);
       }
 
       // Also flush pending attendance drafts if any
@@ -433,31 +584,18 @@ export default function App() {
     return detectConflicts(db);
   }, [db]);
 
-  // Admin login / logout
+  // Admin auth handlers
   const handleOpenAdminLogin = () => {
-    setIsAdminModalOpen(true);
+    auth.signInWithGoogle();
   };
 
   const handleAdminLogout = () => {
-    setIsAdmin(false);
-    try {
-      localStorage.removeItem('ijma_admin_auth');
-    } catch {}
-  };
-
-  const handleAdminSuccess = () => {
-    setIsAdmin(true);
-    try {
-      localStorage.setItem('ijma_admin_auth', 'true');
-    } catch {}
+    auth.signOutUser();
   };
 
   // Rule Handlers
   const handleOpenNewRule = (prefillSubjectId?: string) => {
-    if (!isAdmin) {
-      setIsAdminModalOpen(true);
-      return;
-    }
+    if (!effectiveIsAdmin) return;
     setEditingRule(null);
     setSlotPrefill(prefillSubjectId ? { subjectId: prefillSubjectId } : undefined);
     if (activeTab === 'studio') {
@@ -473,10 +611,7 @@ export default function App() {
     sessionId: string,
     classId?: string
   ) => {
-    if (!isAdmin) {
-      setIsAdminModalOpen(true);
-      return;
-    }
+    if (!effectiveIsAdmin) return;
     setEditingRule(null);
     setSlotPrefill({ day, periodId, sessionId, classId });
     if (activeTab === 'studio') {
@@ -487,10 +622,7 @@ export default function App() {
   };
 
   const handleEditRule = (rule: ScheduleRule) => {
-    if (!isAdmin) {
-      setIsAdminModalOpen(true);
-      return;
-    }
+    if (!effectiveIsAdmin) return;
     setEditingRule(rule);
     setSlotPrefill(undefined);
     if (activeTab === 'studio') {
@@ -501,10 +633,7 @@ export default function App() {
   };
 
   const handleAddRule = () => {
-    if (!isAdmin) {
-      setIsAdminModalOpen(true);
-      return;
-    }
+    if (!effectiveIsAdmin) return;
     setEditingRule(null);
     setSlotPrefill(undefined);
     if (activeTab === 'studio') {
@@ -515,10 +644,8 @@ export default function App() {
   };
 
   const handleDuplicateRule = (rule: ScheduleRule) => {
-    if (!isAdmin) {
-      setIsAdminModalOpen(true);
-      return;
-    }
+    if (!effectiveIsAdmin) return;
+
     const duplicated: ScheduleRule = {
       ...rule,
       id: `rule-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
@@ -536,10 +663,7 @@ export default function App() {
   };
 
   const handleDeleteRule = (ruleId: string) => {
-    if (!isAdmin) {
-      setIsAdminModalOpen(true);
-      return;
-    }
+    if (!effectiveIsAdmin) return;
     saveDatabase({
       ...db,
       rules: db.rules.filter((r) => r.id !== ruleId)
@@ -551,10 +675,7 @@ export default function App() {
   };
 
   const handleToggleRuleActive = (ruleId: string, active: boolean) => {
-    if (!isAdmin) {
-      setIsAdminModalOpen(true);
-      return;
-    }
+    if (!effectiveIsAdmin) return;
     saveDatabase({
       ...db,
       rules: db.rules.map((r) => (r.id === ruleId ? { ...r, active } : r))
@@ -562,10 +683,8 @@ export default function App() {
   };
 
   const handleToggleSubjectRulesActive = (subjectId: string, active: boolean) => {
-    if (!isAdmin) {
-      setIsAdminModalOpen(true);
-      return;
-    }
+    if (!effectiveIsAdmin) return;
+
     saveDatabase({
       ...db,
       rules: db.rules.map((r) => (r.subjectId === subjectId ? { ...r, active } : r))
@@ -592,10 +711,7 @@ export default function App() {
 
   // Reset demo template
   const handleResetData = () => {
-    if (!isAdmin) {
-      setIsAdminModalOpen(true);
-      return;
-    }
+    if (!effectiveIsAdmin) return;
     if (!window.confirm('Kembalikan seluruh data jadwal ke data template bawaan IJMA?')) return;
     fetch('/api/database/reset', { method: 'POST' })
       .then((res) => res.json())
@@ -626,10 +742,7 @@ export default function App() {
 
   // Import JSON
   const handleImportJson = (jsonString: string) => {
-    if (!isAdmin) {
-      setIsAdminModalOpen(true);
-      return;
-    }
+    if (!effectiveIsAdmin) return;
     const parsed = JSON.parse(jsonString);
     if (!parsed || typeof parsed !== 'object') {
       throw new Error('Format JSON tidak valid');
@@ -637,6 +750,11 @@ export default function App() {
     const normalized = normalizeDatabaseState(parsed);
     saveDatabase(normalized);
   };
+
+  // If user is not logged in, show the full AuthGate lock screen (nologin: no access to the app at all)
+  if (!auth.isAuthenticated) {
+    return <AuthGate />;
+  }
 
   return (
     <div className="min-h-screen bg-[#024884] text-slate-900 flex flex-col font-sans antialiased selection:bg-amber-500 selection:text-white">
@@ -651,14 +769,17 @@ export default function App() {
           handleTabChange('database');
         }}
         conflicts={conflicts}
+        db={db}
         showRules={showRules}
         onToggleRules={setShowRules}
         isSaving={isSaving}
         isDirty={combinedIsDirty}
         onSave={handleSaveToCloud}
-        isAdmin={isAdmin}
+        isAdmin={effectiveIsAdmin}
         onOpenAdminLogin={handleOpenAdminLogin}
         onAdminLogout={handleAdminLogout}
+        draftItems={draftItems}
+        onDiscardDrafts={handleDiscardAllDrafts}
       />
       {cloudLoad === 'failed' && (
         <div className="bg-amber-500 text-white text-xs font-semibold px-4 py-2 text-center">
@@ -687,9 +808,35 @@ export default function App() {
             viewerId={viewerId}
             setViewerId={handleSetViewerId}
             onNavigateToJournal={handleNavigateToJournal}
+            onNavigateToSyllabus={handleNavigateToSyllabus}
             onNavigateToSchedule={() => handleTabChange('studio')}
+            onSelectTeacherSchedule={(teacherId) => {
+              setStudioViewMode(ScheduleViewMode.TEACHER_WEEK);
+              setStudioSelectedTeacherId(teacherId);
+              try {
+                localStorage.setItem('ijma_studio_view_mode', ScheduleViewMode.TEACHER_WEEK);
+                localStorage.setItem('ijma_studio_selected_teacher', teacherId);
+              } catch {}
+              setViewerRole('teacher');
+              setViewerId(teacherId);
+              handleTabChange('studio');
+            }}
+            onSelectStudentSchedule={(classId) => {
+              setStudioViewMode(ScheduleViewMode.STUDENT_WEEK);
+              setStudioSelectedClassId(classId);
+              try {
+                localStorage.setItem('ijma_studio_view_mode', ScheduleViewMode.STUDENT_WEEK);
+                localStorage.setItem('ijma_studio_selected_class', classId);
+              } catch {}
+              setViewerRole('student');
+              setViewerId(classId);
+              handleTabChange('studio');
+            }}
             onNavigateToBooks={handleNavigateToBooks}
             onNavigateToAttendance={handleNavigateToAttendance}
+            isAdmin={effectiveIsAdmin}
+            pendingStore={attendancePendingStore}
+            onUpdateDb={saveDatabase}
           />
         )}
 
@@ -697,13 +844,10 @@ export default function App() {
         {activeTab === 'enrollment' && (
           <EnrollmentView
             db={db}
-            isAdmin={isAdmin}
+            isAdmin={effectiveIsAdmin}
             onOpenAdminLogin={handleOpenAdminLogin}
             onBackToPresensi={() => handleTabChange('journal')}
-            onUpdateDb={(updater) => {
-              const updated = typeof updater === 'function' ? updater(db) : updater;
-              saveDatabase(updated);
-            }}
+            onUpdateDb={saveDatabase}
           />
         )}
 
@@ -711,11 +855,8 @@ export default function App() {
         {activeTab === 'kaldik' && (
           <KaldikView
             db={db}
-            onUpdateDb={(updater) => {
-              const updated = typeof updater === 'function' ? updater(db) : updater;
-              saveDatabase(updated);
-            }}
-            isAdmin={isAdmin}
+            onUpdateDb={saveDatabase}
+            isAdmin={effectiveIsAdmin}
             onOpenAdminLogin={handleOpenAdminLogin}
             onNavigateToJournal={handleNavigateToJournal}
             onNavigateToBooks={handleNavigateToBooks}
@@ -728,11 +869,10 @@ export default function App() {
         {activeTab === 'syllabus' && (
           <SyllabusView
             db={db}
-            isAdmin={isAdmin}
-            onUpdateDb={(updater) => {
-              const updated = updater(db);
-              saveDatabase(updated);
-            }}
+            isAdmin={effectiveIsAdmin}
+
+            pendingStore={attendancePendingStore}
+            onUpdateDb={saveDatabase}
             viewerRole={viewerRole}
             setViewerRole={handleSetViewerRole}
             viewerId={viewerId}
@@ -752,10 +892,7 @@ export default function App() {
         {activeTab === 'studio' && (
           <UnifiedStudio
             db={db}
-            onUpdateDb={(updater) => {
-              const updated = typeof updater === 'function' ? updater(db) : updater;
-              saveDatabase(updated);
-            }}
+            onUpdateDb={saveDatabase}
             conflicts={conflicts}
             showRules={showRules}
             onToggleRules={setShowRules}
@@ -770,8 +907,9 @@ export default function App() {
             onToggleRuleActive={handleToggleRuleActive}
             onToggleSubjectRulesActive={handleToggleSubjectRulesActive}
             onViewConflict={() => handleTabChange('conflicts')}
-            isAdmin={isAdmin}
+            isAdmin={effectiveIsAdmin}
             onOpenAdminLogin={handleOpenAdminLogin}
+
             viewerRole={viewerRole}
             viewerId={viewerId}
             onViewerChange={(role, id) => {
@@ -862,6 +1000,25 @@ export default function App() {
           />
         )}
 
+        {/* Menu Tab: Santri */}
+        {activeTab === 'students' && (
+          <StudentsDirectory
+            db={db}
+            onBackToSchedule={() => handleTabChange('studio')}
+            onSelectStudentSchedule={(classId) => {
+              setStudioViewMode(ScheduleViewMode.STUDENT_WEEK);
+              setStudioSelectedClassId(classId);
+              try {
+                localStorage.setItem('ijma_studio_view_mode', ScheduleViewMode.STUDENT_WEEK);
+                localStorage.setItem('ijma_studio_selected_class', classId);
+              } catch {}
+              setViewerRole('student');
+              setViewerId(classId);
+              handleTabChange('studio');
+            }}
+          />
+        )}
+
         {/* Menu Tab: Conflict Inspector (3rd in menu) */}
         {activeTab === 'conflicts' && (
           <ConflictCenter
@@ -878,10 +1035,7 @@ export default function App() {
           <RuleManagerView
             db={db}
             onUpdateDb={(updater) => {
-              if (!isAdmin) {
-                setIsAdminModalOpen(true);
-                return;
-              }
+              if (!effectiveIsAdmin) return;
               const updated = updater(db);
               saveDatabase(updated);
             }}
@@ -894,7 +1048,7 @@ export default function App() {
               }
             }}
             onDeleteRule={handleDeleteRule}
-            isAdmin={isAdmin}
+            isAdmin={effectiveIsAdmin}
             onOpenAdminLogin={handleOpenAdminLogin}
             onNavigateToJournal={handleNavigateToJournal}
             onNavigateToSchedule={() => handleTabChange('studio')}
@@ -911,10 +1065,7 @@ export default function App() {
             initialSubTab={databaseSubTab}
             onSelectSubTab={setDatabaseSubTab}
             onUpdateDb={(updater) => {
-              if (!isAdmin) {
-                setIsAdminModalOpen(true);
-                return;
-              }
+              if (!effectiveIsAdmin) return;
               const updated = updater(db);
               saveDatabase(updated);
             }}
@@ -934,10 +1085,11 @@ export default function App() {
             onNavigateToSchedule={() => handleTabChange('studio')}
             onNavigateToKaldik={() => handleTabChange('kaldik')}
             onNavigateToJournal={() => handleTabChange('journal')}
-            isAdmin={isAdmin}
+            isAdmin={effectiveIsAdmin}
             onOpenAdminLogin={handleOpenAdminLogin}
           />
         )}
+
 
         {/* Menu Tab: Ekspor & Impor Data */}
         {activeTab === 'export-import' && (
@@ -946,10 +1098,7 @@ export default function App() {
             onExportJson={handleExportJson}
             onImportJson={handleImportJson}
             onUpdateDb={(updater) => {
-              if (!isAdmin) {
-                setIsAdminModalOpen(true);
-                return;
-              }
+              if (!effectiveIsAdmin) return;
               const updated = updater(db);
               saveDatabase(updated);
             }}
@@ -976,13 +1125,6 @@ export default function App() {
         db={db}
         editingRule={editingRule}
         prefill={slotPrefill}
-      />
-
-      {/* Admin Password Authentication Modal */}
-      <AdminLoginModal
-        isOpen={isAdminModalOpen}
-        onClose={() => setIsAdminModalOpen(false)}
-        onSuccess={handleAdminSuccess}
       />
     </div>
   );

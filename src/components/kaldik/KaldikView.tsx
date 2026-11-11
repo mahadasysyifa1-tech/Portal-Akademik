@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Calendar } from 'lucide-react';
+import { Calendar, CalendarCheck, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import type { DatabaseState, KaldikEvent, ResolvedSlot } from '../../types';
 import { computeResolvedSlots } from '../../utils/scheduleEngine';
 import { computePacingProjection, getScopedUnits } from '../../utils/pacingEngine';
@@ -24,6 +24,8 @@ import { KaldikToolbar } from './KaldikToolbar';
 import { KaldikMonthGrid } from './KaldikMonthGrid';
 import { KaldikLegendStrip } from './KaldikLegendStrip';
 import { KaldikDayAgenda } from './KaldikDayAgenda';
+import { useAuth } from '../../context/AuthContext';
+
 
 interface KaldikViewProps {
   db: DatabaseState;
@@ -45,7 +47,10 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
   initialMode = 'kaldik',
   pendingStore
 }) => {
+  const auth = useAuth();
+  const effectiveIsAdmin = isAdmin || auth.isAdmin;
   const [mode, setMode] = useState<KaldikMode>(initialMode);
+
   useEffect(() => {
     if (initialMode) setMode(initialMode);
   }, [initialMode]);
@@ -68,6 +73,56 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
   const [editingEvent, setEditingEvent] = useState<KaldikEvent | null>(null);
   const [eventModalDefaultDate, setEventModalDefaultDate] = useState<string | undefined>(undefined);
   const [activeAttendance, setActiveAttendance] = useState<{ slot: ResolvedSlot; meeting?: any } | null>(null);
+
+  // Jadwalkan Pertemuan (Generate All Meetings) states
+  const [isGenerateConfirmOpen, setIsGenerateConfirmOpen] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generateResult, setGenerateResult] = useState<{
+    success: boolean;
+    totalUpserted?: number;
+    preservedCompleted?: number;
+    holidaysSkipped?: number;
+    message?: string;
+  } | null>(null);
+
+  const handleConfirmGenerateMeetings = async () => {
+    setIsGenerating(true);
+    try {
+      const res = await fetch('/api/attendance/generate-all-meetings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.details || err.error || 'Gagal menjadwalkan pertemuan');
+      }
+      const data = await res.json();
+      setIsGenerateConfirmOpen(false);
+      setGenerateResult({
+        success: true,
+        totalUpserted: data.totalUpserted || 0,
+        preservedCompleted: data.preservedCompleted || 0,
+        holidaysSkipped: data.holidaysSkipped || 0,
+      });
+      // Global broadcast to refresh month meetings and App db.meetings
+      window.dispatchEvent(new Event('attendance:saved'));
+      fetch('/api/database')
+        .then((r) => r.json())
+        .then((fresh) => {
+          if (fresh && Array.isArray(fresh.meetings)) {
+            onUpdateDb((prev) => ({ ...prev, meetings: fresh.meetings }));
+          }
+        })
+        .catch(() => {});
+    } catch (err: any) {
+      setGenerateResult({
+        success: false,
+        message: err.message || 'Terjadi kesalahan saat menjadwalkan pertemuan',
+      });
+    } finally {
+      setIsGenerating(false);
+    }
+  };
 
   const { monthMeetingsMap } = useMonthMeetings(currentYear, currentMonth + 1);
 
@@ -347,38 +402,43 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
     }
   };
 
-  const showKaldikAdmin = isAdmin && mode === 'kaldik';
+  const showKaldikAdmin = effectiveIsAdmin && mode === 'kaldik';
 
   return (
     <div className="space-y-4">
       {/* ------------------------------------------------------------- */}
-      {/* Top Toolbar (Month nav & filters, no duplicate mode switch)  */}
+      {/* Top Toolbar (Month nav & filters, sticky floating)           */}
       {/* ------------------------------------------------------------- */}
-      <KaldikToolbar
-        currentYear={currentYear}
-        currentMonth={currentMonth}
-        mode={mode}
-        onPrevMonth={handlePrevMonth}
-        onNextMonth={handleNextMonth}
-        onToday={handleToday}
-        onMonthChange={handleMonthChange}
-        onYearChange={handleYearChange}
-        showFilters={showFilters}
-        onToggleFilters={() => setShowFilters((v) => !v)}
-        selectedPeriodFilter={selectedPeriodFilter}
-        onPeriodFilterChange={setSelectedPeriodFilter}
-        eventTypeFilter={eventTypeFilter}
-        onEventTypeFilterChange={setEventTypeFilter}
-        onResetFilters={() => {
-          setSelectedPeriodFilter('all');
-          setEventTypeFilter('all');
-        }}
-        periods={db.periods}
-        showAddEvent={showKaldikAdmin}
-        onAddEvent={() =>
-          openEventModal(selectedDateStr || `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-01`)
-        }
-      />
+      <div className="sticky top-26 shadow-2xl z-20">
+        <KaldikToolbar
+          currentYear={currentYear}
+          currentMonth={currentMonth}
+          mode={mode}
+          onPrevMonth={handlePrevMonth}
+          onNextMonth={handleNextMonth}
+          onToday={handleToday}
+          onMonthChange={handleMonthChange}
+          onYearChange={handleYearChange}
+          showFilters={showFilters}
+          onToggleFilters={() => setShowFilters((v) => !v)}
+          selectedPeriodFilter={selectedPeriodFilter}
+          onPeriodFilterChange={setSelectedPeriodFilter}
+          eventTypeFilter={eventTypeFilter}
+          onEventTypeFilterChange={setEventTypeFilter}
+          onResetFilters={() => {
+            setSelectedPeriodFilter('all');
+            setEventTypeFilter('all');
+          }}
+          periods={db.periods}
+          showAddEvent={showKaldikAdmin}
+          onAddEvent={() =>
+            openEventModal(selectedDateStr || `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-01`)
+          }
+          showGenerateMeetings={effectiveIsAdmin && mode === 'jurnal'}
+          onGenerateMeetings={() => setIsGenerateConfirmOpen(true)}
+        />
+      </div>
+
 
       {/* ------------------------------------------------------------- */}
       {/* Symmetrical Split-Pane Layout: 38% Left / 62% Right           */}
@@ -500,18 +560,91 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
 
         const sessionObj = sessionMap.get(slot.sessionId);
         const classObj = classMap.get(slot.classId);
+        const canEditSlot = effectiveIsAdmin || auth.canEditSession(slot.teacherId);
 
         return (
           <AttendanceModal
             key={meetingId}
-            isAdmin={isAdmin}
+            isAdmin={canEditSlot}
             meetingId={meetingId}
+
+            meetingNumber={dayMeeting?.meeting_index ?? (dayMeeting as any)?.meetingIndex}
             isOpen={true}
             onClose={() => setActiveAttendance(null)}
             onSaved={() => setActiveAttendance(null)}
             initialDraft={store.getRollCallDraft(meetingId)}
-            onSaveDraft={(payload) => store.setRollCallDraft(meetingId, payload)}
-            onDiscardDraft={() => store.discardDraft(meetingId)}
+            onSaveDraft={(payload) => {
+              store.setRollCallDraft(meetingId, payload);
+              if (payload.materialProgress) {
+                const {
+                  materi: draftMateri,
+                  unitId,
+                  hal: draftHal,
+                  startMateri: draftStartMateri,
+                  startUnitId,
+                  startHal: draftStartHal,
+                } = payload.materialProgress as any;
+                const numHal = draftHal !== undefined && draftHal !== '' ? Number(draftHal) : undefined;
+                const numStartHal = draftStartHal !== undefined && draftStartHal !== '' ? Number(draftStartHal) : undefined;
+                onUpdateDb((prev) => {
+                  const meetings = prev.meetings || [];
+                  const exists = meetings.some((m) => m.id === meetingId);
+                  const updated = exists
+                    ? meetings.map((m) =>
+                        m.id === meetingId
+                          ? {
+                              ...m,
+                              actual_materi_id: unitId || draftMateri || m.actual_materi_id,
+                              actual_page: numHal !== undefined ? numHal : m.actual_page,
+                              actual_start_materi_id: startUnitId || draftStartMateri || m.actual_start_materi_id,
+                              actual_start_page: numStartHal !== undefined ? numStartHal : m.actual_start_page,
+                              notes: payload.meetingNotes !== undefined ? payload.meetingNotes : m.notes,
+                            }
+                          : m
+                      )
+                    : [
+                        ...meetings,
+                        {
+                          id: meetingId,
+                          meeting_date: dateStr,
+                          class_id: slot.classId,
+                          subject_id: slot.subjectId,
+                          teacher_id: slot.teacherId,
+                          room_id: slot.roomId,
+                          session_id: slot.sessionId,
+                          status: 'scheduled',
+                          actual_materi_id: unitId || draftMateri,
+                          actual_page: numHal,
+                          actual_start_materi_id: startUnitId || draftStartMateri,
+                          actual_start_page: numStartHal,
+                          notes: payload.meetingNotes,
+                        } as any,
+                      ];
+                  return { ...prev, meetings: updated };
+                });
+              }
+            }}
+            onDiscardDraft={() => {
+              store.discardDraft(meetingId);
+              onUpdateDb((prev) => {
+                const meetings = prev.meetings || [];
+                return {
+                  ...prev,
+                  meetings: meetings.map((m) =>
+                    m.id === meetingId
+                      ? {
+                          ...m,
+                          actual_materi_id: (dayMeeting as any)?.actual_materi_id,
+                          actual_page: (dayMeeting as any)?.actual_page,
+                          actual_start_materi_id: (dayMeeting as any)?.actual_start_materi_id,
+                          actual_start_page: (dayMeeting as any)?.actual_start_page,
+                          notes: (dayMeeting as any)?.notes,
+                        }
+                      : m
+                  ),
+                };
+              });
+            }}
             getEffectiveStatus={store.getEffectiveStatus}
             hasDraft={store.isMeetingDrafted(meetingId)}
             onSetSessionStatus={(id, next) => store.setSessionStatusDraft(id, next)}
@@ -541,6 +674,113 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
           defaultDate={eventModalDefaultDate}
           periods={db.periods}
         />
+      )}
+
+      {/* Modal Konfirmasi Jadwalkan Pertemuan */}
+      {isGenerateConfirmOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4 backdrop-blur-2xs">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                <CalendarCheck className="w-5 h-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-base font-bold text-slate-900">Jadwalkan Pertemuan KBM</h3>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                  Tindakan ini akan menjadwalkan pertemuan sesuai aturan jadwal KBM yang ada sepanjang semua semester/periode.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 rounded-xl p-3 border border-slate-200 text-xs text-slate-600 space-y-1.5">
+              <div className="flex items-center gap-2 text-slate-700 font-medium">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Pertemuan yang telah selesai/tercatat presensi tetap dipertahankan.</span>
+              </div>
+              <div className="flex items-center gap-2 text-slate-700 font-medium">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Hari libur dan agenda non-KBM otomatis dilewati.</span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={isGenerating}
+                onClick={() => setIsGenerateConfirmOpen(false)}
+                className="px-3 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isGenerating}
+                onClick={handleConfirmGenerateMeetings}
+                className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 active:bg-amber-800 disabled:opacity-50 rounded-xl shadow-2xs transition-colors cursor-pointer"
+              >
+                {isGenerating ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Menjadwalkan...</span>
+                  </>
+                ) : (
+                  <span>Jadwalkan Sekarang</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Hasil Jadwalkan Pertemuan */}
+      {generateResult && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4 backdrop-blur-2xs">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                generateResult.success ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
+              }`}>
+                {generateResult.success ? <CheckCircle2 className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-base font-bold text-slate-900">
+                  {generateResult.success ? 'Penjadwalan Selesai' : 'Gagal Menjadwalkan'}
+                </h3>
+                <div className="text-xs text-slate-600 mt-1 leading-relaxed">
+                  {generateResult.success ? (
+                    <div className="space-y-1">
+                      <p>
+                        Berhasil menjadwalkan <strong>{generateResult.totalUpserted}</strong> pertemuan KBM.
+                      </p>
+                      {generateResult.preservedCompleted !== undefined && generateResult.preservedCompleted > 0 && (
+                        <p className="text-emerald-700">
+                          Sebanyak <strong>{generateResult.preservedCompleted}</strong> pertemuan yang telah selesai dipertahankan.
+                        </p>
+                      )}
+                      {generateResult.holidaysSkipped !== undefined && generateResult.holidaysSkipped > 0 && (
+                        <p className="text-slate-500">
+                          Sebanyak <strong>{generateResult.holidaysSkipped}</strong> hari libur dilewati.
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <p>{generateResult.message}</p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setGenerateResult(null)}
+                className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

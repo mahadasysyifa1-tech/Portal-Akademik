@@ -1,6 +1,6 @@
 import { ActiveTabType } from '../components/Header';
 import type { ViewerRole } from '../types/viewer';
-import { ScheduleViewMode } from '../components/CalendarView';
+import { ScheduleViewMode } from '../components/JadwalView';
 import { DatabaseState } from '../types';
 
 export interface ParsedRoute {
@@ -30,6 +30,7 @@ export function parseUrlRoute(db?: DatabaseState): ParsedRoute {
       else if (lower === 'subjects' || lower === 'pelajaran') tab = 'subjects';
       else if (lower === 'books' || lower === 'kitab' || lower === 'buku') tab = 'books';
       else if (lower === 'teachers' || lower === 'guru') tab = 'teachers';
+      else if (lower === 'students' || lower === 'santri' || lower === 'siswa' || lower === 'murid') tab = 'students';
       else if (lower === 'conflicts' || lower === 'konflik') tab = 'conflicts';
       else if (lower === 'database' || lower === 'data') tab = 'database';
       else if (lower === 'export' || lower === 'ekspor' || lower === 'export-import') tab = 'export-import';

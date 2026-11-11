@@ -17,7 +17,14 @@ export interface PendingRollCallLog {
     note?: string;
   }>;
   meetingNotes?: string;
-  materialProgress?: { materi?: string; hal?: number; unitId?: string };
+  materialProgress?: {
+    materi?: string;
+    hal?: number | string;
+    unitId?: string;
+    startMateri?: string;
+    startHal?: number | string;
+    startUnitId?: string;
+  };
 }
 
 export interface AttendancePendingStore {

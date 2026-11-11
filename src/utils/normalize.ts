@@ -34,23 +34,42 @@ export function normalizeKaldikEvent(raw: any): KaldikEvent {
   const startDate = String(raw.startDate || raw.start_date || new Date().toISOString().slice(0, 10));
   const endDate = String(raw.endDate || raw.end_date || startDate);
 
+  const isKbm = raw.isKbm !== undefined ? Boolean(raw.isKbm) : raw.is_kbm !== undefined ? Boolean(raw.is_kbm) : raw.type === 'kbm';
+  let daysOfWeek: DayOfWeek[] | undefined = undefined;
+  const rawDays = raw.daysOfWeek !== undefined ? raw.daysOfWeek : raw.days_of_week;
+  if (Array.isArray(rawDays)) {
+    daysOfWeek = rawDays;
+  } else if (typeof rawDays === 'string') {
+    try {
+      const parsed = JSON.parse(rawDays);
+      if (Array.isArray(parsed)) daysOfWeek = parsed;
+    } catch {
+      daysOfWeek = undefined;
+    }
+  }
+
   return {
     id: String(raw.id || `evt-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`),
     title: String(raw.title || 'Event Baru'),
-    isKbm: Boolean(raw.isKbm || raw.is_kbm || raw.type === 'kbm'),
-    type: (raw.type as any) || (raw.isKbm ? 'kbm' : 'general'),
-    isAllDay: raw.isAllDay !== undefined ? Boolean(raw.isAllDay) : true,
+    isKbm,
+    type: (raw.type as any) || (isKbm ? 'kbm' : 'general'),
+    isAllDay: raw.isAllDay !== undefined ? Boolean(raw.isAllDay) : raw.is_all_day !== undefined ? Boolean(raw.is_all_day) : true,
     startDate,
     endDate,
     startTime: raw.startTime || raw.start_time || undefined,
     endTime: raw.endTime || raw.end_time || undefined,
     isRecurring: Boolean(raw.isRecurring || raw.is_recurring),
-    daysOfWeek: Array.isArray(raw.daysOfWeek || raw.days_of_week) ? (raw.daysOfWeek || raw.days_of_week) : undefined,
+    daysOfWeek,
     repeatDetail: raw.repeatDetail || raw.repeat_detail || undefined,
-    periodId: raw.periodId || raw.period_id || undefined,
-    color: raw.color || (raw.isKbm ? '#F59E0B' : '#6366F1'),
+    periodId: raw.periodId || raw.period_id || raw.period_code || undefined,
+    color: raw.color || (isKbm ? '#F59E0B' : '#6366F1'),
     description: raw.description || undefined,
-    createdAt: raw.createdAt || raw.created_at || undefined
+    createdAt: raw.createdAt || raw.created_at || undefined,
+    is_kbm: isKbm ? 1 : 0,
+    is_recurring: raw.isRecurring || raw.is_recurring ? 1 : 0,
+    days_of_week: daysOfWeek,
+    repeat_detail: raw.repeatDetail || raw.repeat_detail || undefined,
+    period_id: raw.periodId || raw.period_id || raw.period_code || undefined
   };
 }
 
@@ -539,6 +558,8 @@ export function normalizeDatabaseState(raw: any): DatabaseState {
         status: (m.status === 'cancelled' || m.status === 'completed' || m.status === 'scheduled') ? m.status : 'scheduled',
         actual_materi_id: m.actual_materi_id || m.actualMateriId || undefined,
         actual_page: typeof m.actual_page === 'number' ? m.actual_page : typeof m.actualPage === 'number' ? m.actualPage : undefined,
+        actual_start_materi_id: m.actual_start_materi_id || m.actualStartMateriId || undefined,
+        actual_start_page: typeof m.actual_start_page === 'number' ? m.actual_start_page : typeof m.actualStartPage === 'number' ? m.actualStartPage : undefined,
         notes: m.notes || undefined,
         target_unit_id: m.target_unit_id || m.targetUnitId || undefined,
         target_page_range: m.target_page_range || m.targetPageRange || undefined

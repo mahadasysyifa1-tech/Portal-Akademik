@@ -96,8 +96,13 @@ function slotsForDate(
   dateStr: string,
   dayOfWeek: DayOfWeek,
   slots: ResolvedSlot[],
-  targetPeriod: Period | undefined
+  targetPeriod: Period | undefined,
+  dayEvents: KaldikEvent[] = []
 ): ResolvedSlot[] {
+  // If any event on this date cancels KBM (isKbm === false), exclude all class slots
+  const isKbmCancelled = dayEvents.some((e) => e.isKbm === false);
+  if (isKbmCancelled) return [];
+
   const isDateInFilter =
     !targetPeriod ||
     !targetPeriod.startDate ||
@@ -147,6 +152,7 @@ export function buildCalendarDays(params: BuildCalendarParams): CalendarDay[] {
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = toDateKey(year, month, d);
     const dayOfWeek = dayOfWeekOf(dateStr);
+    const dayEvents = events.filter((evt) => eventOccursOn(evt, dateStr, dayOfWeek, periods, filters));
 
     days.push({
       dateStr,
@@ -155,8 +161,8 @@ export function buildCalendarDays(params: BuildCalendarParams): CalendarDay[] {
       isToday: dateStr === todayStr,
       dayOfWeek,
       activePeriods: periods.filter((p) => dateStr >= p.startDate && dateStr <= p.endDate),
-      events: events.filter((evt) => eventOccursOn(evt, dateStr, dayOfWeek, periods, filters)),
-      classSlots: slotsForDate(dateStr, dayOfWeek, slots, targetPeriod)
+      events: dayEvents,
+      classSlots: slotsForDate(dateStr, dayOfWeek, slots, targetPeriod, dayEvents)
     });
   }
 
@@ -178,8 +184,14 @@ export function computeMonthlyStats(days: CalendarDay[]): MonthlyStats {
 
   for (const d of days) {
     if (!d.isCurrentMonth) continue;
-    if (d.activePeriods.length > 0 || d.events.some((e) => e.isKbm)) kbmDaysCount++;
-    if (d.events.some((e) => e.type === 'holiday')) holidayCount++;
+    const isCancelled = d.events.some((e) => e.isKbm === false);
+    // KBM day count: only count if not cancelled AND has either scheduled slots or explicit KBM event
+    if (!isCancelled && (d.classSlots.length > 0 || d.events.some((e) => e.isKbm === true))) {
+      kbmDaysCount++;
+    }
+    if (d.events.some((e) => e.type === 'holiday' || e.isKbm === false)) {
+      holidayCount++;
+    }
     totalSessions += d.classSlots.length;
   }
 

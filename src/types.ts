@@ -46,6 +46,7 @@ export interface Book {
   defaultSubjectId?: string;
   defaultTeacherId?: string;
   links?: BookLink[];
+  volumes?: BookVolume[];
   chapters?: BookChapter[];
 }
 
@@ -58,15 +59,19 @@ export interface BookLink {
   sortOrder?: number;
 }
 
-export interface BookChapter {
-  id: string; // unique code, e.g. 'chap-bk-math-01'
+export interface BookVolume {
+  id: string; // unique code, e.g. 'vol-bk-math-01'
   bookId: string;
-  chapterNumber: number;
-  title: string;
+  volumeNumber?: number; // Jilid 1, 2, 3...
+  chapterNumber?: number; // legacy alias for backward compatibility
+  title?: string;
   pageStart?: number;
   pageEnd?: number;
   description?: string;
 }
+
+// Alias for backward compatibility
+export type BookChapter = BookVolume;
 
 export interface Material {
   id: string; // unique code, e.g. 'mat-1'
@@ -272,6 +277,18 @@ export interface KaldikEvent {
   color?: string; // Hex color badge e.g. '#F59E0B'
   description?: string;
   createdAt?: string;
+
+  // Interoperability aliases for SQLite
+  is_kbm?: boolean | number;
+  is_recurring?: boolean | number;
+  days_of_week?: DayOfWeek[] | string[];
+  repeat_detail?: string;
+  period_id?: string;
+  start_date?: string;
+  end_date?: string;
+  start_time?: string;
+  end_time?: string;
+  is_all_day?: boolean | number;
 }
 
 export interface DatabaseState {
@@ -305,6 +322,8 @@ export interface MeetingRecord {
   status: 'scheduled' | 'completed' | 'cancelled';
   actual_materi_id?: string;
   actual_page?: number;
+  actual_start_materi_id?: string;
+  actual_start_page?: number;
   notes?: string;
   target_unit_id?: string;
   target_page_range?: string;
@@ -334,7 +353,9 @@ export interface SyllabusUnit {
   id: string;
   bookId?: string; // from book_code
   bookCode?: string;
-  chapterBookId?: string; // chapter book id
+  volumeId?: string; // Resolved ID of the volume/jilid (e.g. 'vol-bk-math-1')
+  volumeNumber?: number; // Integer volume number (e.g. 1, 2)
+  chapterBookId?: string; // legacy alias for volumeId
   chapterNumber?: number;
   subject_id?: string; // dynamically resolved via scope/book or legacy mapel_id
   order: number; // sequential order
@@ -411,6 +432,8 @@ export interface ScheduledSessionOccurrence {
   isCancelled?: boolean;
   actual_materi_id?: string;
   actual_page?: number;
+  actual_start_materi_id?: string;
+  actual_start_page?: number;
   meetingNotes?: string;
 }
 
@@ -469,6 +492,8 @@ export interface AttendanceMeetingSummary {
   status: 'scheduled' | 'completed' | 'cancelled';
   actual_materi_id?: string;
   actual_page?: number;
+  actual_start_materi_id?: string;
+  actual_start_page?: number;
   notes?: string;
   summary: {
     totalEnrolled: number;
@@ -506,3 +531,39 @@ export interface AttendanceRollCallData {
   teacher: AttendanceRollCallTeacher;
   students: AttendanceRollCallStudent[];
 }
+
+export interface AttendanceSummaryItem {
+  personId: string;
+  total: number;
+  hadir: number;
+  terlambat: number;
+  izin: number;
+  sakit: number;
+  alpa: number;
+  rate: number;
+}
+
+export interface AttendanceHistoryEntry {
+  meetingId: string;
+  meetingDate: string;
+  meetingStatus: string;
+  status: AttendanceStatus;
+  timestampStart?: string | null;
+  timestampEnd?: string | null;
+  note?: string | null;
+  className: string;
+  classColor?: string;
+  subjectName: string;
+  subjectColor?: string;
+  teacherName?: string;
+  roomName?: string;
+  sessionName?: string;
+  startTime?: string;
+  endTime?: string;
+  actualMateriId?: string | null;
+  actualPage?: number | null;
+  actualStartMateriId?: string | null;
+  actualStartPage?: number | null;
+  meetingNotes?: string | null;
+}
+

@@ -5,7 +5,7 @@ import {
   ScheduleRule,
   DayOfWeek
 } from '../types';
-import { CalendarView, ScheduleViewMode } from './CalendarView';
+import { JadwalView, ScheduleViewMode } from './JadwalView';
 import { RuleForm } from './RuleForm';
 import type { ViewerRole } from '../types/viewer';
 
@@ -208,9 +208,9 @@ export const UnifiedStudio: React.FC<UnifiedStudioProps> = ({
     <div className="space-y-4">
       {/* Main Content: Single persistent CalendarView container to prevent remounting and state reset */}
       <div className={showRules ? 'grid grid-cols-1 xl:grid-cols-12 gap-5 items-start' : 'w-full'}>
-        {/* Calendar View (Full width or 7 cols when rules open) */}
+        {/* Jadwal View (Full width or 7 cols when rules open) */}
         <div className={showRules ? 'xl:col-span-7 space-y-4' : 'w-full space-y-4'}>
-          <CalendarView
+          <JadwalView
             db={db}
             onUpdateDb={onUpdateDb}
             conflicts={conflicts}

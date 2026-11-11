@@ -552,13 +552,6 @@ const UniversalCsvHub: React.FC<UniversalCsvHubProps> = ({
   const handleExecuteImport = async () => {
     if (!previewFile) return;
 
-    if (selectedTable === 'syllabus') {
-      onOpenSyllabusModal();
-      setCsvPreview(null);
-      setPreviewFile(null);
-      return;
-    }
-
     const reader = new FileReader();
     reader.onload = async (evt) => {
       const text = evt.target?.result as string;
@@ -592,22 +585,50 @@ const UniversalCsvHub: React.FC<UniversalCsvHubProps> = ({
         return;
       }
 
+      if (selectedTable === 'enrollments') {
+        let successCount = 0;
+        for (const row of rows) {
+          const [classId, studentId] = row;
+          if (!classId || !studentId) continue;
+          try {
+            await fetch('/api/enrollment/quick-assign', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ studentId, classId }),
+            });
+            successCount++;
+          } catch {}
+        }
+        onSetStatus({ type: 'success', message: `Berhasil memperbarui ${successCount} penugasan rombel santri.` });
+        setCsvPreview(null);
+        setPreviewFile(null);
+        return;
+      }
+
+      // Helper for intelligent ID upsert (updates existing ID in place, appends new ones)
+      const mergeById = <T extends { id: string }>(prevList: T[] = [], newList: T[]): T[] => {
+        if (importMode === 'replace') return newList;
+        const map = new Map<string, T>(prevList.map((item) => [item.id, item]));
+        newList.forEach((item) => map.set(item.id, item));
+        return Array.from(map.values());
+      };
+
       // Local State Entities Importer
       onUpdateDb((prev) => {
         const next = { ...prev };
         if (selectedTable === 'classes') {
-          const newClasses = rows.map((r) => ({
-            id: r[0] || `cls-${Date.now()}`,
+          const newClasses = rows.map((r, idx) => ({
+            id: r[0] || `cls-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 5)}`,
             name: r[1] || 'Kelas Baru',
             grade: r[2] ? Number(r[2]) : undefined,
             section: r[3] || undefined,
             color: r[4] || '#E2E8F0',
             defaultRoomId: r[5] || undefined,
           }));
-          next.classes = importMode === 'replace' ? newClasses : [...next.classes, ...newClasses];
+          next.classes = mergeById(next.classes, newClasses);
         } else if (selectedTable === 'teachers') {
-          const newTeachers = rows.map((r) => ({
-            id: r[0] || `tch-${Date.now()}`,
+          const newTeachers = rows.map((r, idx) => ({
+            id: r[0] || `tch-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 5)}`,
             name: r[1] || 'Ustadz Baru',
             panggilan: r[2] || undefined,
             email: r[3] || undefined,
@@ -615,36 +636,57 @@ const UniversalCsvHub: React.FC<UniversalCsvHubProps> = ({
             color: r[5] || '#0284C7',
             maxPeriodsPerWeek: r[6] ? Number(r[6]) : 18,
           }));
-          next.teachers = importMode === 'replace' ? newTeachers : [...next.teachers, ...newTeachers];
+          next.teachers = mergeById(next.teachers, newTeachers);
         } else if (selectedTable === 'subjects') {
-          const newSubjects = rows.map((r) => ({
-            id: r[0] || `sub-${Date.now()}`,
+          const newSubjects = rows.map((r, idx) => ({
+            id: r[0] || `sub-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 5)}`,
             name: r[1] || 'Pelajaran Baru',
             code: r[2] || undefined,
             category: r[3] || undefined,
             color: r[4] || '#3B82F6',
             weeklyPeriods: r[5] ? Number(r[5]) : 2,
           }));
-          next.subjects = importMode === 'replace' ? newSubjects : [...next.subjects, ...newSubjects];
+          next.subjects = mergeById(next.subjects, newSubjects);
         } else if (selectedTable === 'rooms') {
-          const newRooms = rows.map((r) => ({
-            id: r[0] || `rm-${Date.now()}`,
+          const newRooms = rows.map((r, idx) => ({
+            id: r[0] || `rm-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 5)}`,
             name: r[1] || 'Ruangan Baru',
             building: r[2] || undefined,
             capacity: r[3] ? Number(r[3]) : 30,
             type: (r[4] as any) || 'Standard',
           }));
-          next.rooms = importMode === 'replace' ? newRooms : [...next.rooms, ...newRooms];
+          next.rooms = mergeById(next.rooms, newRooms);
         } else if (selectedTable === 'books') {
-          const newBooks = rows.map((r) => ({
-            id: r[0] || `bk-${Date.now()}`,
+          const newBooks = rows.map((r, idx) => ({
+            id: r[0] || `bk-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 5)}`,
             title: r[1] || 'Kitab Baru',
             author: r[2] || undefined,
             publisher: r[3] || undefined,
             volumeCount: r[4] ? Number(r[4]) : 1,
             displayCode: r[5] || undefined,
           }));
-          next.books = importMode === 'replace' ? newBooks : [...(next.books || []), ...newBooks];
+          next.books = mergeById(next.books, newBooks);
+        } else if (selectedTable === 'sessions') {
+          const newSessions = rows.map((r, idx) => ({
+            id: r[0] || `ses-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 5)}`,
+            name: r[1] || `Sesi ${idx + 1}`,
+            startTime: r[2] || '07:30',
+            endTime: r[3] || '08:50',
+            sortOrder: r[4] ? Number(r[4]) : idx + 1,
+          }));
+          next.sessions = mergeById(next.sessions, newSessions);
+        } else if (selectedTable === 'rules') {
+          const newRules = rows.map((r, idx) => ({
+            id: r[0] || `rul-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 5)}`,
+            subjectId: r[1] || '',
+            classId: r[2] || '',
+            teacherId: r[3] || undefined,
+            roomId: r[4] || undefined,
+            sessionId: r[5] || '',
+            daysOfWeek: r[6] ? r[6].split(';').map((d) => d.trim()).filter(Boolean) : [],
+            active: r[7] === '0' || r[7]?.toLowerCase() === 'false' ? false : true,
+          }));
+          next.rules = mergeById(next.rules, newRules);
         }
         return next;
       });
@@ -746,59 +788,85 @@ const UniversalCsvHub: React.FC<UniversalCsvHubProps> = ({
 
         {/* Upload File Section for this table */}
         <div className="space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <span className="text-xs font-bold text-slate-800">
-              Impor Berkas CSV ke Tabel {tableConfig.label}:
-            </span>
-            <div className="flex items-center gap-3 text-xs">
-              <span className="text-slate-500">Mode Impor:</span>
-              <label className="inline-flex items-center gap-1 text-slate-700 cursor-pointer">
-                <input
-                  type="radio"
-                  name="importMode"
-                  value="append"
-                  checked={importMode === 'append'}
-                  onChange={() => setImportMode('append')}
-                  className="text-indigo-600"
-                />
-                <span>Tambahkan (Append)</span>
-              </label>
-              <label className="inline-flex items-center gap-1 text-slate-700 cursor-pointer">
-                <input
-                  type="radio"
-                  name="importMode"
-                  value="replace"
-                  checked={importMode === 'replace'}
-                  onChange={() => setImportMode('replace')}
-                  className="text-indigo-600"
-                />
-                <span>Gantikan Semua (Replace)</span>
-              </label>
+          {selectedTable === 'syllabus' ? (
+            <div className="bg-white p-4 rounded-xl border border-indigo-200/80 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h5 className="text-xs font-bold text-slate-800 flex items-center gap-2">
+                    <BookOpen className="w-4 h-4 text-indigo-600" />
+                    <span>Dialog Impor Silabus &amp; Materi Pembelajaran</span>
+                  </h5>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    Unggah berkas CSV materi pelajaran langsung melalui dialog wizard khusus untuk memetakan buku, bab, dan rentang halaman.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={onOpenSyllabusModal}
+                  className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-all shadow-xs cursor-pointer shrink-0"
+                >
+                  <Upload className="w-4 h-4" />
+                  <span>Buka Dialog Unggah Silabus</span>
+                </button>
+              </div>
             </div>
-          </div>
+          ) : (
+            <>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <span className="text-xs font-bold text-slate-800">
+                  Impor Berkas CSV ke Tabel {tableConfig.label}:
+                </span>
+                <div className="flex items-center gap-3 text-xs">
+                  <span className="text-slate-500">Mode Impor:</span>
+                  <label className="inline-flex items-center gap-1 text-slate-700 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="importMode"
+                      value="append"
+                      checked={importMode === 'append'}
+                      onChange={() => setImportMode('append')}
+                      className="text-indigo-600"
+                    />
+                    <span>Tambahkan (Append)</span>
+                  </label>
+                  <label className="inline-flex items-center gap-1 text-slate-700 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="importMode"
+                      value="replace"
+                      checked={importMode === 'replace'}
+                      onChange={() => setImportMode('replace')}
+                      className="text-indigo-600"
+                    />
+                    <span>Gantikan Semua (Replace)</span>
+                  </label>
+                </div>
+              </div>
 
-          <div className="flex flex-col sm:flex-row items-center gap-2">
-            <input
-              ref={csvFileInputRef}
-              type="file"
-              accept=".csv"
-              onChange={handleFileSelected}
-              className="hidden"
-            />
-            <button
-              type="button"
-              onClick={() => csvFileInputRef.current?.click()}
-              className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl transition-colors cursor-pointer"
-            >
-              <Upload className="w-4 h-4 text-slate-500" />
-              <span>Pilih Berkas CSV ({tableConfig.label})</span>
-            </button>
-            {previewFile && (
-              <span className="text-xs font-medium text-slate-600 truncate max-w-xs">
-                Berkas: {previewFile.name} ({(previewFile.size / 1024).toFixed(1)} KB)
-              </span>
-            )}
-          </div>
+              <div className="flex flex-col sm:flex-row items-center gap-2">
+                <input
+                  ref={csvFileInputRef}
+                  type="file"
+                  accept=".csv"
+                  onChange={handleFileSelected}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => csvFileInputRef.current?.click()}
+                  className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl transition-colors cursor-pointer"
+                >
+                  <Upload className="w-4 h-4 text-slate-500" />
+                  <span>Pilih Berkas CSV ({tableConfig.label})</span>
+                </button>
+                {previewFile && (
+                  <span className="text-xs font-medium text-slate-600 truncate max-w-xs">
+                    Berkas: {previewFile.name} ({(previewFile.size / 1024).toFixed(1)} KB)
+                  </span>
+                )}
+              </div>
+            </>
+          )}
 
           {/* CSV Preview Table */}
           {csvPreview && (

@@ -1,0 +1,18 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User identity mirrored from Firebase Auth into Turso app_users",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string" }
+      },
+      "required": ["uid", "email", "role"]
+    }
+  },
+  "firestore": {}
+}

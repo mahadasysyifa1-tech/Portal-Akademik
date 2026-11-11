@@ -3,7 +3,8 @@ import { BookmarkCheck } from 'lucide-react';
 import {
   DatabaseState,
   Teacher,
-  Room
+  Room,
+  ScheduledSessionOccurrence
 } from '../types';
 import {
   computePacingProjection,
@@ -14,6 +15,10 @@ import {
   SyllabusFilterMode
 } from './syllabus/SyllabusSubjectPicker';
 import { SyllabusTimeline } from './syllabus/SyllabusTimeline';
+import { AttendanceModal } from './attendance/AttendanceModal';
+import { useAttendancePendingStore, AttendancePendingStore } from '../utils/useAttendancePendingStore';
+import { useAuth } from '../context/AuthContext';
+
 
 export type ViewerRole = 'student' | 'teacher' | 'admin';
 
@@ -21,6 +26,7 @@ export interface SyllabusViewProps {
   db: DatabaseState;
   isAdmin: boolean;
   onUpdateDb: (updater: (prev: DatabaseState) => DatabaseState) => void;
+  pendingStore?: AttendancePendingStore;
   viewerRole?: ViewerRole;
   setViewerRole?: (role: ViewerRole) => void;
   viewerId?: string;
@@ -38,6 +44,8 @@ export interface SyllabusViewProps {
 export const SyllabusView: React.FC<SyllabusViewProps> = ({
   db,
   isAdmin,
+  onUpdateDb,
+  pendingStore,
   initialSubjectId,
   initialClassId,
   highlightDate,
@@ -47,6 +55,13 @@ export const SyllabusView: React.FC<SyllabusViewProps> = ({
   onNavigateToSyllabusScope,
   onNavigateToBooks
 }) => {
+  const fallbackStore = useAttendancePendingStore();
+  const store = pendingStore || fallbackStore;
+  const auth = useAuth();
+  const effectiveIsAdmin = isAdmin || auth.isAdmin;
+  const [activeAttendanceSession, setActiveAttendanceSession] = useState<ScheduledSessionOccurrence | null>(null);
+
+
   // Navigation states
   const [selectedSubjectId, setSelectedSubjectId] = useState<string | null>(initialSubjectId || null);
   const [selectedClassId, setSelectedClassId] = useState<string | null>(initialClassId || null);
@@ -263,7 +278,7 @@ export const SyllabusView: React.FC<SyllabusViewProps> = ({
         checkpointIdx = 0;
       }
 
-      const remainingSessionCount = Math.max(1, activeProjections.length - checkpointIdx);
+      const remainingSessionCount = Math.max(1, activeProjections.length - (checkpointIdx + 1));
       let currUnitIdx = -1;
       if (adj.checkpointUnitId) {
         currUnitIdx = scopedUnits.findIndex((u) => u.id === adj!.checkpointUnitId);
@@ -317,6 +332,32 @@ export const SyllabusView: React.FC<SyllabusViewProps> = ({
     };
   }, [db, selectedSubjectId, selectedClassId, existingScope]);
 
+  // Baseline unadjusted target pacing data
+  const targetPacingData = useMemo(() => {
+    if (!selectedSubjectId || !selectedClassId) return null;
+    const projection = computePacingProjection(db, selectedSubjectId, selectedClassId, { viewMode: 'target' });
+    const scopedUnits = getScopedUnits(db, selectedSubjectId, selectedClassId);
+
+    const totalPages = scopedUnits.reduce((acc, u) => {
+      const pStart = typeof u.page_start === 'number' ? u.page_start : parseInt(String(u.page_start), 10);
+      const pEnd = typeof u.page_end === 'number' ? u.page_end : parseInt(String(u.page_end), 10);
+      if (!isNaN(pStart) && !isNaN(pEnd) && pEnd >= pStart) {
+        return acc + (pEnd - pStart + 1);
+      }
+      return acc + 1;
+    }, 0);
+
+    const activeCount = projection.length;
+    const pagesPerSession = activeCount > 0 ? (totalPages / activeCount).toFixed(1) : '0';
+
+    return {
+      projection,
+      scopedUnits,
+      totalPages,
+      pagesPerSession
+    };
+  }, [db, selectedSubjectId, selectedClassId]);
+
   const displayNumber = (slotIdx: number) => {
     return Math.max(1, slotIdx);
   };
@@ -368,6 +409,7 @@ export const SyllabusView: React.FC<SyllabusViewProps> = ({
           currentClass={currentClass}
           applicableClasses={applicableClasses}
           pacingData={pacingData}
+          targetPacingData={targetPacingData}
           existingScope={existingScope}
           isAdmin={isAdmin}
           onNavigateToSyllabusScope={onNavigateToSyllabusScope}
@@ -389,8 +431,126 @@ export const SyllabusView: React.FC<SyllabusViewProps> = ({
           todayRowRef={todayRowRef}
           currentSessionRef={currentSessionRef}
           displayNumber={displayNumber}
+          onOpenAttendance={(session) => setActiveAttendanceSession(session)}
         />
       )}
+
+      {/* In-Place Attendance & Material Calibration Modal */}
+      {activeAttendanceSession && (() => {
+        const session = activeAttendanceSession;
+        const meetingId = session.id;
+        const scopedUnits = pacingData?.scopedUnits || [];
+        const sessionObj = db.sessions.find((s) => s.id === session.sessionId);
+        const classObj = db.classes.find((c) => c.id === session.classId);
+
+        const canEditSession = effectiveIsAdmin || auth.canEditSession(session.teacherId);
+
+        return (
+          <AttendanceModal
+            key={meetingId}
+            isAdmin={canEditSession}
+            meetingId={meetingId}
+
+            meetingNumber={session.meetingIndex}
+            isOpen={true}
+            onClose={() => setActiveAttendanceSession(null)}
+            onSaved={() => setActiveAttendanceSession(null)}
+            initialDraft={store.getRollCallDraft(meetingId)}
+            onSaveDraft={(payload) => {
+              store.setRollCallDraft(meetingId, payload);
+              if (onUpdateDb) {
+                const numHal =
+                  payload.materialProgress?.hal !== undefined &&
+                  payload.materialProgress.hal !== '' &&
+                  !isNaN(Number(payload.materialProgress.hal))
+                    ? Number(payload.materialProgress.hal)
+                    : undefined;
+                const numStartHal =
+                  payload.materialProgress?.startHal !== undefined &&
+                  payload.materialProgress.startHal !== '' &&
+                  !isNaN(Number(payload.materialProgress.startHal))
+                    ? Number(payload.materialProgress.startHal)
+                    : undefined;
+                const unitId = payload.materialProgress?.unitId;
+                const startUnitId = payload.materialProgress?.startUnitId;
+                const draftMateri = payload.materialProgress?.materi;
+                const draftStartMateri = payload.materialProgress?.startMateri;
+
+                onUpdateDb((prev) => {
+                  const meetings = prev.meetings || [];
+                  const idx = meetings.findIndex((m) => m.id === meetingId);
+                  const updated =
+                    idx !== -1
+                      ? meetings.map((m, i) =>
+                          i === idx
+                            ? {
+                                ...m,
+                                actual_materi_id: unitId || draftMateri,
+                                actual_page: numHal,
+                                actual_start_materi_id: startUnitId || draftStartMateri,
+                                actual_start_page: numStartHal,
+                                notes: payload.meetingNotes,
+                              }
+                            : m
+                        )
+                      : [
+                          ...meetings,
+                          {
+                            id: meetingId,
+                            meeting_date: session.date,
+                            meeting_index: session.meetingIndex,
+                            class_id: session.classId,
+                            subject_id: session.subjectId,
+                            teacher_id: session.teacherId,
+                            room_id: session.roomId,
+                            session_id: session.sessionId,
+                            status: 'scheduled',
+                            actual_materi_id: unitId || draftMateri,
+                            actual_page: numHal,
+                            actual_start_materi_id: startUnitId || draftStartMateri,
+                            actual_start_page: numStartHal,
+                            notes: payload.meetingNotes,
+                          } as any,
+                        ];
+                  return { ...prev, meetings: updated };
+                });
+              }
+            }}
+            onDiscardDraft={() => {
+              store.discardDraft(meetingId);
+              if (onUpdateDb) {
+                onUpdateDb((prev) => {
+                  const meetings = prev.meetings || [];
+                  return {
+                    ...prev,
+                    meetings: meetings.map((m) =>
+                      m.id === meetingId
+                        ? {
+                            ...m,
+                            actual_materi_id: session.actual_materi_id,
+                            actual_page: session.actual_page,
+                            actual_start_materi_id: session.actual_start_materi_id,
+                            actual_start_page: session.actual_start_page,
+                          }
+                        : m
+                    ),
+                  };
+                });
+              }
+            }}
+            getEffectiveStatus={store.getEffectiveStatus}
+            hasDraft={store.isMeetingDrafted(meetingId)}
+            onSetSessionStatus={(id, next) => store.setSessionStatusDraft(id, next)}
+            targetMateri={scopedUnits[0]?.title}
+            targetHal={scopedUnits[0]?.page_end ? Number(scopedUnits[0].page_end) : undefined}
+            targetUnitId={scopedUnits[0]?.id}
+            availableUnits={scopedUnits}
+            sessionTitle={sessionObj?.name || session.sessionName}
+            classTitle={classObj?.name}
+            formattedDate={`${session.day}, ${session.date}`}
+          />
+        );
+      })()}
     </div>
   );
 };

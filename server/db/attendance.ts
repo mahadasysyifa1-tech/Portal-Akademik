@@ -1,9 +1,12 @@
 import { Client } from '@libsql/client';
+import { invalidateDatabaseStateCache } from './index.ts';
 import type {
   DatabaseState,
   AttendanceStatus,
   AttendancePersonType,
   DayOfWeek,
+  AttendanceSummaryItem,
+  AttendanceHistoryEntry,
 } from '../../src/types.ts';
 
 // ----------------------------------------------------------------------------
@@ -40,6 +43,8 @@ export interface MeetingSummaryRow {
   status: 'scheduled' | 'completed' | 'cancelled';
   actual_materi_id?: string;
   actual_page?: number;
+  actual_start_materi_id?: string;
+  actual_start_page?: number;
   notes?: string;
   summary: {
     totalEnrolled: number;
@@ -245,6 +250,8 @@ export async function getOrCreateDayMeetings(
       m.status,
       m.actual_materi_id,
       m.actual_page,
+      m.actual_start_materi_id,
+      m.actual_start_page,
       m.notes,
       c.name as class_name,
       c.color as class_color,
@@ -342,6 +349,8 @@ export async function getOrCreateDayMeetings(
     let notes = m.notes || undefined;
     let actualMateriId = m.actual_materi_id || undefined;
     let actualPage = m.actual_page !== null && m.actual_page !== undefined ? Number(m.actual_page) : undefined;
+    let actualStartMateriId = m.actual_start_materi_id || undefined;
+    let actualStartPage = m.actual_start_page !== null && m.actual_start_page !== undefined ? Number(m.actual_start_page) : undefined;
 
     if (notes && typeof notes === 'string' && notes.trim().startsWith('{')) {
       try {
@@ -360,6 +369,21 @@ export async function getOrCreateDayMeetings(
           const p = parsed.actual_page ?? parsed.hal ?? parsed.page ?? parsed.materialProgress?.hal;
           if (p !== undefined && p !== null && !isNaN(Number(p))) {
             actualPage = Number(p);
+          }
+        }
+        if (!actualStartMateriId) {
+          actualStartMateriId =
+            parsed.actual_start_materi_id ||
+            parsed.startUnitId ||
+            parsed.startMateri ||
+            parsed.materialProgress?.startUnitId ||
+            parsed.materialProgress?.startMateri ||
+            undefined;
+        }
+        if (actualStartPage === undefined) {
+          const sp = parsed.actual_start_page ?? parsed.startHal ?? parsed.startPage ?? parsed.materialProgress?.startHal;
+          if (sp !== undefined && sp !== null && !isNaN(Number(sp))) {
+            actualStartPage = Number(sp);
           }
         }
         notes =
@@ -398,6 +422,8 @@ export async function getOrCreateDayMeetings(
       status: m.status as any,
       actual_materi_id: actualMateriId,
       actual_page: actualPage,
+      actual_start_materi_id: actualStartMateriId,
+      actual_start_page: actualStartPage,
       notes,
       summary: {
         totalEnrolled,
@@ -501,6 +527,8 @@ export async function getMeetingRollCall(
   let cleanNotes = m.notes || '';
   let resolvedMateriId = m.actual_materi_id || undefined;
   let resolvedPage = m.actual_page !== null && m.actual_page !== undefined ? Number(m.actual_page) : undefined;
+  let resolvedStartMateriId = m.actual_start_materi_id || undefined;
+  let resolvedStartPage = m.actual_start_page !== null && m.actual_start_page !== undefined ? Number(m.actual_start_page) : undefined;
 
   if (typeof cleanNotes === 'string' && cleanNotes.trim().startsWith('{')) {
     try {
@@ -519,6 +547,21 @@ export async function getMeetingRollCall(
         const p = parsed.actual_page ?? parsed.hal ?? parsed.page ?? parsed.materialProgress?.hal;
         if (p !== undefined && p !== null && !isNaN(Number(p))) {
           resolvedPage = Number(p);
+        }
+      }
+      if (!resolvedStartMateriId) {
+        resolvedStartMateriId =
+          parsed.actual_start_materi_id ||
+          parsed.startUnitId ||
+          parsed.startMateri ||
+          parsed.materialProgress?.startUnitId ||
+          parsed.materialProgress?.startMateri ||
+          undefined;
+      }
+      if (resolvedStartPage === undefined) {
+        const sp = parsed.actual_start_page ?? parsed.startHal ?? parsed.startPage ?? parsed.materialProgress?.startHal;
+        if (sp !== undefined && sp !== null && !isNaN(Number(sp))) {
+          resolvedStartPage = Number(sp);
         }
       }
       cleanNotes =
@@ -558,6 +601,8 @@ export async function getMeetingRollCall(
       status: m.status as any,
       actual_materi_id: resolvedMateriId,
       actual_page: resolvedPage,
+      actual_start_materi_id: resolvedStartMateriId,
+      actual_start_page: resolvedStartPage,
       notes: cleanNotes,
       summary: {
         totalEnrolled: studentList.length,
@@ -597,7 +642,14 @@ export async function saveMeetingRollCall(
   teacherLog: { id: string; status: AttendanceStatus; timestampStart?: string; timestampEnd?: string; note?: string },
   studentLogs: Array<{ studentId: string; status: AttendanceStatus; timestampStart?: string; timestampEnd?: string; note?: string }>,
   meetingNotes?: string,
-  materialProgress?: { materi?: string; hal?: number | string; unitId?: string }
+  materialProgress?: {
+    materi?: string;
+    hal?: number | string;
+    unitId?: string;
+    startMateri?: string;
+    startHal?: number | string;
+    startUnitId?: string;
+  }
 ): Promise<void> {
   const statements: Array<{ sql: string; args: any[] }> = [];
 
@@ -605,6 +657,11 @@ export async function saveMeetingRollCall(
   const actualPage =
     materialProgress?.hal !== undefined && materialProgress.hal !== '' && !isNaN(Number(materialProgress.hal))
       ? Number(materialProgress.hal)
+      : null;
+  const actualStartMateriId = materialProgress?.startUnitId || materialProgress?.startMateri || null;
+  const actualStartPage =
+    materialProgress?.startHal !== undefined && materialProgress.startHal !== '' && !isNaN(Number(materialProgress.startHal))
+      ? Number(materialProgress.startHal)
       : null;
   const cleanNotes = meetingNotes ? meetingNotes.trim() : null;
 
@@ -623,13 +680,15 @@ export async function saveMeetingRollCall(
               notes = ?, 
               actual_materi_id = ?,
               actual_page = ?,
+              actual_start_materi_id = ?,
+              actual_start_page = ?,
               present_count = ?, 
               absent_count = ?, 
               enrolled_count = ?, 
               is_logged = ?, 
               updated_at = CURRENT_TIMESTAMP 
           WHERE id = ?`,
-    args: [isLoggedNow, cleanNotes, actualMateriId, actualPage, hadirCount, absentCount, enrolledCount, isLoggedNow, meetingId],
+    args: [isLoggedNow, cleanNotes, actualMateriId, actualPage, actualStartMateriId, actualStartPage, hadirCount, absentCount, enrolledCount, isLoggedNow, meetingId],
   });
 
   // Upsert or Delete Teacher Log
@@ -681,6 +740,7 @@ export async function saveMeetingRollCall(
   }
 
   await client.batch(statements, 'write');
+  invalidateDatabaseStateCache();
 }
 
 // ----------------------------------------------------------------------------
@@ -712,6 +772,8 @@ export async function getMonthMeetings(
       m.status,
       m.actual_materi_id,
       m.actual_page,
+      m.actual_start_materi_id,
+      m.actual_start_page,
       m.notes,
       c.name as class_name,
       c.color as class_color,
@@ -779,6 +841,8 @@ export async function getMonthMeetings(
       status: m.status as any,
       actual_materi_id: m.actual_materi_id || undefined,
       actual_page: m.actual_page !== null && m.actual_page !== undefined ? Number(m.actual_page) : undefined,
+      actual_start_materi_id: m.actual_start_materi_id || undefined,
+      actual_start_page: m.actual_start_page !== null && m.actual_start_page !== undefined ? Number(m.actual_start_page) : undefined,
       notes: m.notes,
       summary: {
         totalEnrolled,
@@ -802,7 +866,14 @@ export interface BatchSaveAttendancePayload {
     teacherLog?: { id: string; status: AttendanceStatus; timestampStart?: string; timestampEnd?: string; note?: string };
     studentLogs?: Array<{ studentId: string; status: AttendanceStatus; timestampStart?: string; timestampEnd?: string; note?: string }>;
     meetingNotes?: string;
-    materialProgress?: { materi?: string; hal?: number; unitId?: string };
+    materialProgress?: {
+      materi?: string;
+      hal?: number | string;
+      unitId?: string;
+      startMateri?: string;
+      startHal?: number | string;
+      startUnitId?: string;
+    };
   }>;
 }
 
@@ -834,8 +905,13 @@ export async function batchSaveAttendance(
       const enrolledCount = studentLogs.length;
       const actualMateriId = materialProgress?.unitId || materialProgress?.materi || null;
       const actualPage =
-        materialProgress?.hal !== undefined && materialProgress.hal !== null && !isNaN(Number(materialProgress.hal))
+        materialProgress?.hal !== undefined && materialProgress.hal !== null && materialProgress.hal !== '' && !isNaN(Number(materialProgress.hal))
           ? Number(materialProgress.hal)
+          : null;
+      const actualStartMateriId = materialProgress?.startUnitId || materialProgress?.startMateri || null;
+      const actualStartPage =
+        materialProgress?.startHal !== undefined && materialProgress.startHal !== null && materialProgress.startHal !== '' && !isNaN(Number(materialProgress.startHal))
+          ? Number(materialProgress.startHal)
           : null;
       const cleanNotes = meetingNotes ? meetingNotes.trim() : null;
       const isLoggedNow = loggedStudents.length > 0 || (teacherLog && !!teacherLog.status) ? 1 : 0;
@@ -850,13 +926,27 @@ export async function batchSaveAttendance(
                   notes = ?, 
                   actual_materi_id = ?,
                   actual_page = ?,
+                  actual_start_materi_id = ?,
+                  actual_start_page = ?,
                   present_count = ?, 
                   absent_count = ?, 
                   enrolled_count = ?, 
                   is_logged = ?, 
                   updated_at = CURRENT_TIMESTAMP 
               WHERE id = ?`,
-        args: [isLoggedNow, cleanNotes, actualMateriId, actualPage, hadirCount, absentCount, enrolledCount, isLoggedNow, meetingId],
+        args: [
+          isLoggedNow,
+          cleanNotes,
+          actualMateriId,
+          actualPage,
+          actualStartMateriId,
+          actualStartPage,
+          hadirCount,
+          absentCount,
+          enrolledCount,
+          isLoggedNow,
+          meetingId,
+        ],
       });
 
       if (teacherLog && teacherLog.id) {
@@ -888,19 +978,28 @@ export async function batchSaveAttendance(
           });
         }
       }
-      for (const s of loggedStudents) {
-        statements.push({
-          sql: `INSERT INTO attnd_meeting_log (
-                  meeting_id, person_type, person_id, status, timestamp_start, timestamp_end, note, updated_at
-                ) VALUES (?, 'student', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(meeting_id, person_type, person_id) DO UPDATE SET
-                  status = excluded.status,
-                  timestamp_start = excluded.timestamp_start,
-                  timestamp_end = excluded.timestamp_end,
-                  note = excluded.note,
-                  updated_at = CURRENT_TIMESTAMP`,
-          args: [meetingId, s.studentId, s.status, s.timestampStart || null, s.timestampEnd || null, s.note || null],
-        });
+
+      // Student logs: upsert if status is set, delete if status was cleared/deselected
+      for (const s of studentLogs) {
+        if (s.status) {
+          statements.push({
+            sql: `INSERT INTO attnd_meeting_log (
+                    meeting_id, person_type, person_id, status, timestamp_start, timestamp_end, note, updated_at
+                  ) VALUES (?, 'student', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                  ON CONFLICT(meeting_id, person_type, person_id) DO UPDATE SET
+                    status = excluded.status,
+                    timestamp_start = excluded.timestamp_start,
+                    timestamp_end = excluded.timestamp_end,
+                    note = excluded.note,
+                    updated_at = CURRENT_TIMESTAMP`,
+            args: [meetingId, s.studentId, s.status, s.timestampStart || null, s.timestampEnd || null, s.note || null],
+          });
+        } else {
+          statements.push({
+            sql: `DELETE FROM attnd_meeting_log WHERE meeting_id = ? AND person_type = 'student' AND person_id = ?`,
+            args: [meetingId, s.studentId],
+          });
+        }
       }
 
       updatedCount++;
@@ -910,6 +1009,8 @@ export async function batchSaveAttendance(
   if (statements.length > 0) {
     await client.batch(statements, 'write');
   }
+
+  invalidateDatabaseStateCache();
 
   return { success: true, updatedCount };
 }
@@ -1246,7 +1347,7 @@ export async function generateAllRuleMeetings(
   const nonKbmDates = new Set<string>();
   const kaldikEvents = state.kaldikEvents || [];
   for (const ev of kaldikEvents) {
-    if (ev.isKbm === false || ev.type === 'holiday') {
+    if (ev.type === 'holiday') {
       if (!ev.startDate || !ev.endDate) continue;
       const s = new Date(ev.startDate);
       const e = new Date(ev.endDate);
@@ -1452,6 +1553,53 @@ function assembleRollCall(m: any, enrolledRows: any[], logs: any[]): MeetingRoll
     };
   });
 
+  let notes = m.notes || undefined;
+  let actualMateriId = m.actual_materi_id || undefined;
+  let actualPage = m.actual_page !== null && m.actual_page !== undefined ? Number(m.actual_page) : undefined;
+  let actualStartMateriId = m.actual_start_materi_id || undefined;
+  let actualStartPage = m.actual_start_page !== null && m.actual_start_page !== undefined ? Number(m.actual_start_page) : undefined;
+
+  if (notes && typeof notes === 'string' && notes.trim().startsWith('{')) {
+    try {
+      const parsed = JSON.parse(notes);
+      if (!actualMateriId) {
+        actualMateriId =
+          parsed.actual_materi_id ||
+          parsed.unitId ||
+          parsed.materiId ||
+          parsed.materialProgress?.unitId ||
+          parsed.materialProgress?.materi ||
+          parsed.materi ||
+          undefined;
+      }
+      if (actualPage === undefined) {
+        const p = parsed.actual_page ?? parsed.hal ?? parsed.page ?? parsed.materialProgress?.hal;
+        if (p !== undefined && p !== null && !isNaN(Number(p))) actualPage = Number(p);
+      }
+      if (!actualStartMateriId) {
+        actualStartMateriId =
+          parsed.actual_start_materi_id ||
+          parsed.startUnitId ||
+          parsed.startMateri ||
+          parsed.materialProgress?.startUnitId ||
+          parsed.materialProgress?.startMateri ||
+          undefined;
+      }
+      if (actualStartPage === undefined) {
+        const sp = parsed.actual_start_page ?? parsed.startHal ?? parsed.startPage ?? parsed.materialProgress?.startHal;
+        if (sp !== undefined && sp !== null && !isNaN(Number(sp))) actualStartPage = Number(sp);
+      }
+      notes =
+        typeof parsed.summary === 'string'
+          ? parsed.summary
+          : typeof parsed.notes === 'string'
+          ? parsed.notes
+          : typeof parsed.userNote === 'string'
+          ? parsed.userNote
+          : undefined;
+    } catch {}
+  }
+
   return {
     meeting: {
       id: m.id,
@@ -1474,9 +1622,11 @@ function assembleRollCall(m: any, enrolledRows: any[], logs: any[]): MeetingRoll
       startTime: m.start_time || '08:00',
       endTime: m.end_time || '10:00',
       status: m.status as any,
-      actual_materi_id: m.actual_materi_id || undefined,
-      actual_page: m.actual_page !== null && m.actual_page !== undefined ? Number(m.actual_page) : undefined,
-      notes: m.notes,
+      actual_materi_id: actualMateriId,
+      actual_page: actualPage,
+      actual_start_materi_id: actualStartMateriId,
+      actual_start_page: actualStartPage,
+      notes,
       summary: {
         totalEnrolled: studentList.length,
         hadirCount: studentList.filter((s) => s.status === 'Hadir').length,
@@ -1555,3 +1705,134 @@ export async function getMonthRollCalls(
   assembleRollCall(m, enrollByClass.get(m.class_id) || [], logsByMeeting.get(m.id) || [])
   );
 }
+
+export async function getAttendanceSummary(
+  client: Client,
+  personType: 'student' | 'teacher',
+  month?: string
+): Promise<Record<string, AttendanceSummaryItem>> {
+  let sql = `
+    SELECT 
+      l.person_id,
+      COUNT(l.meeting_id) as total,
+      SUM(CASE WHEN l.status = 'Hadir' THEN 1 ELSE 0 END) as hadir,
+      SUM(CASE WHEN l.status = 'Terlambat' THEN 1 ELSE 0 END) as terlambat,
+      SUM(CASE WHEN l.status = 'Izin' THEN 1 ELSE 0 END) as izin,
+      SUM(CASE WHEN l.status = 'Sakit' THEN 1 ELSE 0 END) as sakit,
+      SUM(CASE WHEN l.status = 'Alpa' THEN 1 ELSE 0 END) as alpa
+    FROM attnd_meeting_log l
+    JOIN attnd_meeting m ON m.id = l.meeting_id
+    WHERE l.person_type = ?
+  `;
+  const args: any[] = [personType];
+
+  if (month && month !== 'all' && /^\d{4}-\d{2}$/.test(month)) {
+    sql += ` AND m.meeting_date >= ? AND m.meeting_date <= ?`;
+    args.push(`${month}-01`, `${month}-31`);
+  }
+
+  sql += ` GROUP BY l.person_id`;
+
+  const res = await client.execute({ sql, args });
+  const result: Record<string, AttendanceSummaryItem> = {};
+
+  for (const row of res.rows as any[]) {
+    const total = Number(row.total) || 0;
+    const hadir = Number(row.hadir) || 0;
+    const terlambat = Number(row.terlambat) || 0;
+    const izin = Number(row.izin) || 0;
+    const sakit = Number(row.sakit) || 0;
+    const alpa = Number(row.alpa) || 0;
+    // Hadir and terlambat combined count as present
+    const present = hadir + terlambat;
+    const rate = total > 0 ? Math.round((present / total) * 100) : 0;
+
+    result[String(row.person_id)] = {
+      personId: String(row.person_id),
+      total,
+      hadir,
+      terlambat,
+      izin,
+      sakit,
+      alpa,
+      rate,
+    };
+  }
+
+  return result;
+}
+
+export async function getPersonAttendanceHistory(
+  client: Client,
+  personType: 'student' | 'teacher',
+  personId: string,
+  month?: string
+): Promise<AttendanceHistoryEntry[]> {
+  let sql = `
+    SELECT 
+      l.meeting_id,
+      l.status,
+      l.timestamp_start,
+      l.timestamp_end,
+      l.note,
+      m.meeting_date,
+      m.status as meeting_status,
+      m.actual_page,
+      m.actual_materi_id,
+      m.actual_start_page,
+      m.actual_start_materi_id,
+      m.notes as meeting_notes,
+      c.name as class_name,
+      c.color as class_color,
+      s.name as subject_name,
+      s.color as subject_color,
+      t.name as teacher_name,
+      r.name as room_name,
+      ses.name as session_name,
+      ses.start_time,
+      ses.end_time
+    FROM attnd_meeting_log l
+    JOIN attnd_meeting m ON m.id = l.meeting_id
+    LEFT JOIN classes c ON c.id = m.class_id
+    LEFT JOIN subjects s ON s.id = m.subject_id
+    LEFT JOIN teachers t ON t.id = m.teacher_id
+    LEFT JOIN rooms r ON r.id = m.room_id
+    LEFT JOIN sessions ses ON ses.id = m.session_id
+    WHERE l.person_type = ? AND l.person_id = ?
+  `;
+  const args: any[] = [personType, personId];
+
+  if (month && month !== 'all' && /^\d{4}-\d{2}$/.test(month)) {
+    sql += ` AND m.meeting_date >= ? AND m.meeting_date <= ?`;
+    args.push(`${month}-01`, `${month}-31`);
+  }
+
+  sql += ` ORDER BY m.meeting_date DESC, ses.start_time DESC`;
+
+  const res = await client.execute({ sql, args });
+
+  return (res.rows as any[]).map((r) => ({
+    meetingId: String(r.meeting_id),
+    meetingDate: String(r.meeting_date),
+    meetingStatus: String(r.meeting_status || 'completed'),
+    status: r.status as AttendanceStatus,
+    timestampStart: r.timestamp_start ? String(r.timestamp_start) : null,
+    timestampEnd: r.timestamp_end ? String(r.timestamp_end) : null,
+    note: r.note ? String(r.note) : null,
+    className: r.class_name ? String(r.class_name) : 'Kelas',
+    classColor: r.class_color ? String(r.class_color) : undefined,
+    subjectName: r.subject_name ? String(r.subject_name) : 'Pelajaran',
+    subjectColor: r.subject_color ? String(r.subject_color) : undefined,
+    teacherName: r.teacher_name ? String(r.teacher_name) : 'Pengajar',
+    roomName: r.room_name ? String(r.room_name) : 'Ruangan',
+    sessionName: r.session_name ? String(r.session_name) : 'Sesi',
+    startTime: r.start_time ? String(r.start_time) : '',
+    endTime: r.end_time ? String(r.end_time) : '',
+    actualMateriId: r.actual_materi_id ? String(r.actual_materi_id) : null,
+    actualPage: r.actual_page !== null && r.actual_page !== undefined ? Number(r.actual_page) : null,
+    actualStartMateriId: r.actual_start_materi_id ? String(r.actual_start_materi_id) : null,
+    actualStartPage: r.actual_start_page !== null && r.actual_start_page !== undefined ? Number(r.actual_start_page) : null,
+    meetingNotes: r.meeting_notes ? String(r.meeting_notes) : null,
+  }));
+}
+

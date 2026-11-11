@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan to inspect and update SyllabusTimeline.tsx by removing deprecated admin action buttons, minimalizing calibration indicators with a subtle icon beside 'Materi Target', and adding a page-difference pacing summary in the header to clearly show whether progress is ahead, behind, or on track.",
-  "updatedAt":  "2026-10-27T09:46:16.438483590Z",
+  "summary":  "Updated implementation plan reflecting user revisions:\n1. HomeTab.tsx Grid & Responsiveness: On wide screens, lay out cards in a responsive 2 or 3 column grid (profile card, current class, next class, shortcuts). Ensure accurate stats from db.rules and enrollments, and wire up AttendanceHistoryModal and onSelectSchedule.\n2. JadwalView Role & Selector: Keep selectors visible for all users instead of hiding them. Sticky-default to the user's authenticated role and ID (Teacher -> teacher schedule, Student -> student class), while allowing schedule selection.\n3. RoleRequestsView: Skipped per user instruction.",
+  "updatedAt":  "2026-11-10T12:42:57.084190180Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

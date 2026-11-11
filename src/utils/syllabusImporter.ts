@@ -108,6 +108,9 @@ export function parseSyllabusCsv(
   const headerKeys = rawHeaders.map(cleanHeaderKey);
 
   // Find column indices
+  const colId = headerKeys.findIndex((k) =>
+    ['id', 'unitid', 'materiid', 'idmateri', 'kodeid'].includes(k)
+  );
   const colBookCode = headerKeys.findIndex((k) =>
     ['bookcode', 'bookid', 'buku', 'kitab', 'kodebuku', 'book', 'kode'].includes(k)
   );
@@ -128,6 +131,7 @@ export function parseSyllabusCsv(
   );
 
   const rawParsedUnits: Array<{
+    id?: string;
     resolvedBook: Book;
     bookId: string;
     subject_id?: string;
@@ -174,6 +178,7 @@ export function parseSyllabusCsv(
     );
     const inferredSubjectId = subjectForBook ? subjectForBook.id : (resolvedBook.defaultSubjectId || '');
 
+    const explicitId = colId !== -1 && row[colId] ? row[colId].trim() : undefined;
     const rawNStr = colOrder !== -1 ? row[colOrder] : '';
     const parsedN = parseFloat(rawNStr);
     const rawOrder = isNaN(parsedN) ? r : parsedN;
@@ -184,6 +189,7 @@ export function parseSyllabusCsv(
     const part = colPart !== -1 && row[colPart] ? row[colPart] : '1';
 
     rawParsedUnits.push({
+      id: explicitId,
       resolvedBook,
       bookId: resolvedBook.id,
       subject_id: inferredSubjectId || undefined,
@@ -211,8 +217,17 @@ export function parseSyllabusCsv(
 
     bookItems.forEach((item, index) => {
       const assignedOrder = index + 1;
+      const partNum = parseInt(String(item.part || '1'), 10) || 1;
+      // Auto-resolve connection to book volume
+      const existingVols = item.resolvedBook.volumes || item.resolvedBook.chapters || [];
+      const matchedVol = existingVols.find((v: any) => (v.volumeNumber ?? v.chapterNumber) === partNum);
+      const volumeId = matchedVol?.id || `vol-${bId}-${partNum}`;
+
+      // Use explicit ID if provided by user/CSV to preserve exact references and relations
+      const unitId = item.id || `unit-${bId}-${assignedOrder}`;
+
       finalUnits.push({
-        id: `unit-${bId}-${assignedOrder}`,
+        id: unitId,
         bookId: bId,
         bookCode: item.resolvedBook.displayCode || item.resolvedBook.display_code || bId,
         subject_id: item.subject_id,
@@ -220,7 +235,11 @@ export function parseSyllabusCsv(
         title: item.title,
         page_start: item.page_start,
         page_end: item.page_end,
-        part: item.part
+        part: partNum,
+        volumeId,
+        volumeNumber: partNum,
+        chapterBookId: volumeId,
+        chapterNumber: partNum,
       });
     });
   });
@@ -235,15 +254,17 @@ export function parseSyllabusCsv(
 /**
  * Generates sample CSV template for SyllabusUnit
  * Template headers: book_code,order,title,page_start,page_end,part
+ * (Note: unit_weight deprecated as not necessary for user input)
  * If books input is provided, outputs 1 clean sample row per book in db.books
  */
 export function getSampleSyllabusCsv(booksInput?: Book[] | string): string {
-  const headers = ['book_code', 'order', 'title', 'page_start', 'page_end', 'part'];
+  const headers = ['id', 'book_code', 'order', 'title', 'page_start', 'page_end', 'part'];
 
   if (Array.isArray(booksInput) && booksInput.length > 0) {
     const sampleRows = booksInput.map((b, i) => {
       const code = b.displayCode || b.display_code || b.id;
       return [
+        `unit-${code.toLowerCase().replace(/[^a-z0-9]/g, '-')}-1`,
         code,
         '1',
         `Mukaddimah & Bab 1 (${b.title})`,
@@ -257,9 +278,9 @@ export function getSampleSyllabusCsv(booksInput?: Book[] | string): string {
 
   const defaultCode = typeof booksInput === 'string' && booksInput.trim() ? booksInput.trim() : 'BK-ARB';
   const sampleRows = [
-    [defaultCode, '1', 'Mukaddimah & Kaidah Dasar', '1', '14', '1'],
-    [defaultCode, '2', 'Bab 1: Pembahasan Utama', '15', '30', '1'],
-    [defaultCode, '3', 'Bab 2: Pendalaman & Latihan', '31', '50', '1']
+    [`unit-${defaultCode.toLowerCase()}-1`, defaultCode, '1', 'Mukaddimah & Kaidah Dasar', '1', '14', '1'],
+    [`unit-${defaultCode.toLowerCase()}-2`, defaultCode, '2', 'Bab 1: Pembahasan Utama', '15', '30', '1'],
+    [`unit-${defaultCode.toLowerCase()}-3`, defaultCode, '3', 'Bab 2: Pendalaman & Latihan', '31', '50', '1']
   ];
 
   return [headers.join(','), ...sampleRows.map((r) => r.map(escapeCsv).join(','))].join('\r\n');
@@ -267,18 +288,19 @@ export function getSampleSyllabusCsv(booksInput?: Book[] | string): string {
 
 /**
  * Export all syllabus units to CSV
- * Headers: book_id,book_title,order,title,page_start,page_end,part,unit_weight
+ * Headers: id,book_id,book_title,order,title,page_start,page_end,part
+ * (id is the unique key to preserve data relations on re-import)
  */
 export function exportSyllabusUnitsToCsv(units: SyllabusUnit[], db?: DatabaseState): string {
   const headers = [
+    'id',
     'book_id',
     'book_title',
     'order',
     'title',
     'page_start',
     'page_end',
-    'part',
-    'unit_weight'
+    'part'
   ];
 
   const bookLookup = new Map<string, Book>();
@@ -293,21 +315,15 @@ export function exportSyllabusUnitsToCsv(units: SyllabusUnit[], db?: DatabaseSta
     const bookIdVal = book ? (book.displayCode || book.display_code || book.id) : (u.bookCode || u.bookId || '');
     const bookTitleVal = book ? book.title : '';
 
-    const pStart = typeof u.page_start === 'number' ? u.page_start : parseInt(String(u.page_start), 10);
-    const pEnd = typeof u.page_end === 'number' ? u.page_end : parseInt(String(u.page_end), 10);
-    const weight = (!isNaN(pStart) && !isNaN(pEnd) && pEnd >= pStart)
-      ? (pEnd - pStart + 1)
-      : 1;
-
     return [
+      escapeCsv(u.id),
       escapeCsv(bookIdVal),
       escapeCsv(bookTitleVal),
       escapeCsv(u.order),
       escapeCsv(u.title),
       escapeCsv(u.page_start),
       escapeCsv(u.page_end),
-      escapeCsv(u.part ?? 1),
-      escapeCsv(weight)
+      escapeCsv(u.part ?? 1)
     ].join(',');
   });
 

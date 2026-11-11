@@ -165,6 +165,9 @@ CREATE TABLE IF NOT EXISTS kaldik_events (
     end_date TEXT NOT NULL,
     start_time TEXT,
     end_time TEXT,
+    is_recurring INTEGER NOT NULL DEFAULT 0,
+    days_of_week TEXT,
+    repeat_detail TEXT NOT NULL DEFAULT 'Weekly',
     period_code TEXT,
     color TEXT,
     description TEXT,
@@ -296,12 +299,14 @@ CREATE TABLE IF NOT EXISTS students (
     name TEXT NOT NULL,
     gender TEXT CHECK (gender IN ('L', 'P')),
     phone TEXT,
+    email TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_students_nisn ON students(nisn);
 CREATE INDEX IF NOT EXISTS idx_students_name ON students(name);
+CREATE INDEX IF NOT EXISTS idx_students_email ON students(email);
 
 CREATE TABLE IF NOT EXISTS attnd_enroll (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -339,6 +344,8 @@ CREATE TABLE IF NOT EXISTS attnd_meeting (
     status TEXT NOT NULL DEFAULT 'scheduled',
     actual_materi_id TEXT,
     actual_page INTEGER,
+    actual_start_materi_id TEXT,
+    actual_start_page INTEGER,
     notes TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -373,4 +380,33 @@ CREATE INDEX IF NOT EXISTS idx_log_status ON attnd_meeting_log(status);
 CREATE INDEX IF NOT EXISTS idx_log_covering ON attnd_meeting_log(meeting_id, person_type, status);
 `;
 
-export const UNIFIED_SCHEMA_SQL = `${METADATA_SCHEMA_SQL}\n${KALDIK_SCHEMA_SQL}\n${ATTENDANCE_SCHEMA_SQL}`;
+export const AUTH_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS app_users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid TEXT NOT NULL UNIQUE,
+    email TEXT NOT NULL UNIQUE,
+    display_name TEXT,
+    photo_url TEXT,
+    role TEXT NOT NULL DEFAULT 'guest',
+    teacher_id TEXT REFERENCES teachers(id) ON DELETE SET NULL,
+    student_id TEXT REFERENCES students(id) ON DELETE SET NULL,
+    class_id TEXT REFERENCES classes(id) ON DELETE SET NULL,
+    requested_role TEXT CHECK (requested_role IN ('teacher', 'student')),
+    requested_person_id TEXT,
+    request_status TEXT DEFAULT 'none' CHECK (request_status IN ('none', 'pending', 'approved', 'rejected')),
+    requested_at DATETIME,
+    last_login_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_email ON app_users(email);
+CREATE INDEX IF NOT EXISTS idx_users_uid ON app_users(uid);
+CREATE INDEX IF NOT EXISTS idx_users_role ON app_users(role);
+CREATE INDEX IF NOT EXISTS idx_users_teacher_id ON app_users(teacher_id);
+CREATE INDEX IF NOT EXISTS idx_users_student_id ON app_users(student_id);
+CREATE INDEX IF NOT EXISTS idx_users_request_status ON app_users(request_status);
+`;
+
+export const UNIFIED_SCHEMA_SQL = `${METADATA_SCHEMA_SQL}\n${KALDIK_SCHEMA_SQL}\n${ATTENDANCE_SCHEMA_SQL}\n${AUTH_SCHEMA_SQL}`;
+

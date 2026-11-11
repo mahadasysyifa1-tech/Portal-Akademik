@@ -30,18 +30,22 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  Filter
+  Filter,
+  UserCheck
 } from 'lucide-react';
+import { RoleRequestsView } from './admin/RoleRequestsView';
 
 export type DatabaseSubTab =
   | 'classes'
   | 'teachers'
+  | 'students'
   | 'rooms'
   | 'subjects'
   | 'books'
   | 'sessions'
   | 'periods'
-  | 'materi';
+  | 'materi'
+  | 'requests';
 
 export interface EntityManagerProps {
   db: DatabaseState;
@@ -82,6 +86,11 @@ function cascadeDeleteEntity(prev: DatabaseState, type: DatabaseSubTab, idToDele
       next.books = (prev.books || []).map((b) =>
         b.defaultTeacherId === idToDelete ? { ...b, defaultTeacherId: undefined } : b
       );
+      break;
+    }
+    case 'students': {
+      next.students = (prev.students || []).filter((s) => s.id !== idToDelete);
+      next.enrollments = (prev.enrollments || []).filter((e) => e.studentId !== idToDelete);
       break;
     }
     case 'rooms': {
@@ -170,6 +179,8 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [editingItem, setEditingItem] = useState<{ type: DatabaseSubTab; data: any; isNew: boolean } | null>(null);
 
+  const [pendingRequestsCount, setPendingRequestsCount] = useState<number>(0);
+
   const handleSubTabChange = (t: DatabaseSubTab) => {
     setSubTab(t);
     setSearch('');
@@ -181,12 +192,14 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
   const TABLE_DEFS = [
     { id: 'classes' as const, name: 'Kelas', icon: Layers, count: (db.classes || []).length },
     { id: 'teachers' as const, name: 'Guru', icon: Users, count: (db.teachers || []).length },
+    { id: 'students' as const, name: 'Santri', icon: GraduationCap, count: (db.students || []).length },
     { id: 'rooms' as const, name: 'Ruang', icon: DoorOpen, count: (db.rooms || []).length },
     { id: 'subjects' as const, name: 'Mapel', icon: GraduationCap, count: (db.subjects || []).length },
     { id: 'books' as const, name: 'Buku', icon: BookOpen, count: (db.books || []).length },
     { id: 'sessions' as const, name: 'Sesi', icon: Clock, count: (db.sessions || []).length },
     { id: 'periods' as const, name: 'Periode', icon: CalendarClock, count: (db.periods || []).length },
-    { id: 'materi' as const, name: 'Materi', icon: Database, count: (db.syllabusUnits || []).length }
+    { id: 'materi' as const, name: 'Materi', icon: Database, count: (db.syllabusUnits || []).length },
+    { id: 'requests' as const, name: 'Permintaan Akun', icon: UserCheck, count: pendingRequestsCount }
   ];
 
   // Helper maps for displaying relational labels
@@ -194,6 +207,23 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
   const roomMap = useMemo(() => new Map((db.rooms || []).map((r) => [r.id, r.name])), [db.rooms]);
   const subjectMap = useMemo(() => new Map((db.subjects || []).map((s) => [s.id, s.name])), [db.subjects]);
   const bookMap = useMemo(() => new Map((db.books || []).map((b) => [b.id, b.title])), [db.books]);
+  const classMap = useMemo(() => new Map((db.classes || []).map((c) => [c.id, c.name])), [db.classes]);
+  const studentEnrollmentsMap = useMemo(() => {
+    const map = new Map<string, string[]>();
+    (db.students || []).forEach((s) => {
+      if (s.enrolledClassIds && s.enrolledClassIds.length > 0) {
+        map.set(s.id, [...s.enrolledClassIds]);
+      }
+    });
+    (db.enrollments || []).forEach((e) => {
+      const list = map.get(e.studentId) || [];
+      if (!list.includes(e.classId)) {
+        list.push(e.classId);
+      }
+      map.set(e.studentId, list);
+    });
+    return map;
+  }, [db.students, db.enrollments]);
 
   // Filter current table records
   const currentList = useMemo(() => {
@@ -201,6 +231,7 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
     switch (subTab) {
       case 'classes': list = db.classes || []; break;
       case 'teachers': list = db.teachers || []; break;
+      case 'students': list = db.students || []; break;
       case 'rooms': list = db.rooms || []; break;
       case 'subjects': list = db.subjects || []; break;
       case 'books': list = db.books || []; break;
@@ -230,7 +261,9 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
       const matchAlt = String(item.altTitle || item.department || item.panggilan || '').toLowerCase().includes(q);
       const matchBook = subTab === 'materi' && String(bookMap.get(item.bookId) || '').toLowerCase().includes(q);
       const matchBab = subTab === 'materi' && (`bab ${item.order}`.includes(q) || String(item.order).includes(q));
-      return matchId || matchCode || matchName || matchAlt || matchBook || matchBab;
+      const matchNisn = subTab === 'students' && String(item.nisn || '').toLowerCase().includes(q);
+      const matchPhone = subTab === 'students' && String(item.phone || '').toLowerCase().includes(q);
+      return matchId || matchCode || matchName || matchAlt || matchBook || matchBab || matchNisn || matchPhone;
     });
   }, [subTab, db, search, materiBookFilter, bookMap]);
 
@@ -271,6 +304,17 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
           department: 'Diniyyah',
           maxPeriodsPerWeek: 18,
           color: '#0284C7'
+        };
+        break;
+      case 'students':
+        initialData = {
+          id: `stu-${Date.now().toString(36).slice(-4)}`,
+          display_code: '',
+          name: '',
+          nisn: '',
+          gender: 'L',
+          phone: '',
+          enrolledClassIds: (db.classes && db.classes[0]) ? [db.classes[0].id] : []
         };
         break;
       case 'rooms':
@@ -369,6 +413,12 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
     } else if (type === 'teachers') {
       formattedData.maxPeriodsPerWeek = Number(data.maxPeriodsPerWeek ?? data.max_periods_per_week) || 18;
       formattedData.max_periods_per_week = formattedData.maxPeriodsPerWeek;
+    } else if (type === 'students') {
+      formattedData.nisn = data.nisn || undefined;
+      formattedData.gender = data.gender || 'L';
+      formattedData.phone = data.phone || undefined;
+      const enrolledClassIds: string[] = Array.isArray(data.enrolledClassIds) ? data.enrolledClassIds : [];
+      formattedData.enrolledClassIds = enrolledClassIds;
     } else if (type === 'rooms') {
       formattedData.capacity = Number(data.capacity) || 30;
     } else if (type === 'subjects') {
@@ -413,11 +463,40 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
             syllabusUnits: [...existingList, formattedData]
           };
         }
+        if (type === 'students') {
+          const enrolledClassIds: string[] = formattedData.enrolledClassIds || [];
+          const otherEnrollments = (prev.enrollments || []).filter((e) => e.studentId !== cleanId);
+          const newEnrollments = enrolledClassIds.map((cid) => ({
+            classId: cid,
+            studentId: cleanId,
+            active: 1
+          }));
+          return {
+            ...prev,
+            students: [...existingList, formattedData],
+            enrollments: [...otherEnrollments, ...newEnrollments]
+          };
+        }
         return {
           ...prev,
           [type]: [...existingList, formattedData]
         };
       } else {
+        if (type === 'students') {
+          const enrolledClassIds: string[] = formattedData.enrolledClassIds || [];
+          const otherEnrollments = (prev.enrollments || []).filter((e) => e.studentId !== cleanId);
+          const newEnrollments = enrolledClassIds.map((cid) => ({
+            classId: cid,
+            studentId: cleanId,
+            active: 1
+          }));
+          const existingStudents = prev.students || [];
+          return {
+            ...prev,
+            students: existingStudents.map((s) => (s.id === cleanId ? { ...s, ...formattedData } : s)),
+            enrollments: [...otherEnrollments, ...newEnrollments]
+          };
+        }
         const targetKey = type === 'materi' ? 'syllabusUnits' : type;
         const currentList = (prev as any)[targetKey] || [];
         return {
@@ -469,14 +548,16 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
               </button>
             )}
 
-            <button
-              type="button"
-              onClick={handleOpenCreate}
-              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors cursor-pointer shadow-2xs"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Tambah {TABLE_DEFS.find((t) => t.id === subTab)?.name}</span>
-            </button>
+            {subTab !== 'requests' && (
+              <button
+                type="button"
+                onClick={handleOpenCreate}
+                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors cursor-pointer shadow-2xs"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Tambah {TABLE_DEFS.find((t) => t.id === subTab)?.name}</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -511,8 +592,11 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
         </div>
       </div>
 
-      {/* Flat Database Table View */}
-      <div className="space-y-3">
+      {/* Flat Database Table View or Requests View */}
+      {subTab === 'requests' ? (
+        <RoleRequestsView onRefreshCount={setPendingRequestsCount} />
+      ) : (
+        <div className="space-y-3">
         {/* Controls Bar */}
         <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-2xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2 flex-1">
@@ -601,6 +685,14 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
                       <th className="px-3 py-2.5">Email</th>
                     </>
                   )}
+                  {subTab === 'students' && (
+                    <>
+                      <th className="px-3 py-2.5">NISN</th>
+                      <th className="px-3 py-2.5 text-center">Gender</th>
+                      <th className="px-3 py-2.5">Kelas Terdaftar</th>
+                      <th className="px-3 py-2.5">Kontak</th>
+                    </>
+                  )}
                   {subTab === 'rooms' && (
                     <>
                       <th className="px-3 py-2.5">Gedung</th>
@@ -619,6 +711,7 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
                     <>
                       <th className="px-3 py-2.5">Judul Alt</th>
                       <th className="px-3 py-2.5">Pengarang</th>
+                      <th className="px-3 py-2.5">Edisi</th>
                       <th className="px-3 py-2.5 text-center">Jilid / Hal</th>
                       <th className="px-3 py-2.5">Mapel Terkait</th>
                     </>
@@ -700,6 +793,43 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
                           </>
                         )}
 
+                        {/* Students Columns */}
+                        {subTab === 'students' && (
+                          <>
+                            <td className="px-3 py-2.5 font-mono text-slate-600">{item.nisn || '-'}</td>
+                            <td className="px-3 py-2.5 text-center">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                  item.gender === 'P'
+                                    ? 'bg-pink-50 text-pink-700 border border-pink-200'
+                                    : 'bg-blue-50 text-blue-700 border border-blue-200'
+                                }`}
+                              >
+                                {item.gender === 'P' ? 'Akhwat (P)' : 'Ikhwan (L)'}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2.5">
+                              <div className="flex flex-wrap gap-1">
+                                {(() => {
+                                  const classIds = item.enrolledClassIds || studentEnrollmentsMap.get(item.id) || [];
+                                  if (classIds.length === 0) {
+                                    return <span className="text-slate-400 italic">Belum terdaftar</span>;
+                                  }
+                                  return classIds.map((cid: string) => (
+                                    <span
+                                      key={cid}
+                                      className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200"
+                                    >
+                                      {classMap.get(cid) || cid}
+                                    </span>
+                                  ));
+                                })()}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2.5 text-slate-500 font-mono">{item.phone || '-'}</td>
+                          </>
+                        )}
+
                         {/* Rooms Columns */}
                         {subTab === 'rooms' && (
                           <>
@@ -727,6 +857,15 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
                           <>
                             <td className="px-3 py-2.5 text-slate-600">{item.altTitle || '-'}</td>
                             <td className="px-3 py-2.5 text-slate-600">{item.author || '-'}</td>
+                            <td className="px-3 py-2.5 text-slate-700 font-medium">
+                              {item.edition ? (
+                                <span className="px-1.5 py-0.5 rounded text-[11px] bg-slate-100 text-slate-700 border border-slate-200">
+                                  {item.edition}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 italic text-[11px]">-</span>
+                              )}
+                            </td>
                             <td className="px-3 py-2.5 text-center font-mono">
                               {(() => {
                                 const chapters = item.chapters || [];
@@ -894,6 +1033,7 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
           </div>
         </div>
       </div>
+      )}
 
       {/* Flat Create / Edit Modal */}
       {editingItem && (
@@ -1213,6 +1353,93 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
                 </div>
               )}
 
+              {/* Specific fields for Students */}
+              {editingItem.type === 'students' && (
+                <div className="space-y-2.5">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">NISN</label>
+                      <input
+                        type="text"
+                        value={editingItem.data.nisn || ''}
+                        onChange={(e) =>
+                          setEditingItem({
+                            ...editingItem,
+                            data: { ...editingItem.data, nisn: e.target.value }
+                          })
+                        }
+                        placeholder="Contoh: 0081234567"
+                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Jenis Kelamin</label>
+                      <select
+                        value={editingItem.data.gender || 'L'}
+                        onChange={(e) =>
+                          setEditingItem({
+                            ...editingItem,
+                            data: { ...editingItem.data, gender: e.target.value }
+                          })
+                        }
+                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                      >
+                        <option value="L">Ikhwan (Laki-laki)</option>
+                        <option value="P">Akhwat (Perempuan)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">No. Kontak / WhatsApp</label>
+                    <input
+                      type="text"
+                      value={editingItem.data.phone || ''}
+                      onChange={(e) =>
+                        setEditingItem({
+                          ...editingItem,
+                          data: { ...editingItem.data, phone: e.target.value }
+                        })
+                      }
+                      placeholder="Contoh: 081234567890"
+                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Rombel / Kelas Terdaftar</label>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-2.5 bg-slate-50 border border-slate-200 rounded-lg max-h-36 overflow-y-auto">
+                      {(db.classes || []).map((cls) => {
+                        const currentClassIds: string[] =
+                          editingItem.data.enrolledClassIds ||
+                          studentEnrollmentsMap.get(editingItem.data.id) ||
+                          [];
+                        const isChecked = currentClassIds.includes(cls.id);
+                        return (
+                          <label key={cls.id} className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                const next = e.target.checked
+                                  ? [...currentClassIds, cls.id]
+                                  : currentClassIds.filter((id) => id !== cls.id);
+                                setEditingItem({
+                                  ...editingItem,
+                                  data: { ...editingItem.data, enrolledClassIds: next }
+                                });
+                              }}
+                              className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                            />
+                            <span className="truncate">{cls.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* 3. Specific fields for Rooms */}
               {editingItem.type === 'rooms' && (
                 <div className="grid grid-cols-3 gap-2">
@@ -1449,7 +1676,7 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
                       />
                     </div>
                     <div>
-                      <label className="block font-bold text-slate-700 mb-1">Edisi / Jilid</label>
+                      <label className="block font-bold text-slate-700 mb-1">Edisi</label>
                       <input
                         type="text"
                         value={editingItem.data.edition || ''}
@@ -1551,6 +1778,153 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
                         ))}
                       </select>
                     </div>
+                  </div>
+
+                  {/* Volume (Jilid) List Editor */}
+                  <div className="pt-2.5 border-t border-slate-200/80 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <label className="block font-bold text-slate-800 text-xs">
+                          Daftar Jilid (Volume Kitab)
+                        </label>
+                        <p className="text-[10px] text-slate-400">
+                          Kelola rincian jilid fisik, judul jilid, dan batas halaman per jilid.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const currentVols = editingItem.data.volumes || editingItem.data.chapters || [];
+                          const nextNum = currentVols.length + 1;
+                          const newVol = {
+                            id: `vol-${editingItem.data.id || 'book'}-${nextNum}`,
+                            bookId: editingItem.data.id || '',
+                            volumeNumber: nextNum,
+                            chapterNumber: nextNum,
+                            title: `Jilid ${nextNum}`,
+                            pageStart: 1,
+                            pageEnd: 100,
+                          };
+                          const updated = [...currentVols, newVol];
+                          setEditingItem({
+                            ...editingItem,
+                            data: {
+                              ...editingItem.data,
+                              volumes: updated,
+                              chapters: updated,
+                              totalChapters: updated.length,
+                            },
+                          });
+                        }}
+                        className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg border border-indigo-200 transition-colors cursor-pointer"
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>Tambah Jilid</span>
+                      </button>
+                    </div>
+
+                    {(() => {
+                      const vols = editingItem.data.volumes || editingItem.data.chapters || [];
+                      if (vols.length === 0) {
+                        return (
+                          <div className="p-3 bg-slate-50 border border-dashed border-slate-200 rounded-lg text-center text-[11px] text-slate-400">
+                            Belum ada rincian jilid. Klik tombol "Tambah Jilid" untuk menambahkan volume buku.
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                          {vols.map((vol: any, idx: number) => (
+                            <div
+                              key={vol.id || idx}
+                              className="flex items-center gap-2 p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                            >
+                              <span className="font-mono text-[10px] font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded shrink-0">
+                                Jilid {vol.volumeNumber ?? vol.chapterNumber ?? (idx + 1)}
+                              </span>
+                              <input
+                                type="text"
+                                value={vol.title || ''}
+                                onChange={(e) => {
+                                  const updated = vols.map((v: any, i: number) =>
+                                    i === idx ? { ...v, title: e.target.value } : v
+                                  );
+                                  setEditingItem({
+                                    ...editingItem,
+                                    data: { ...editingItem.data, volumes: updated, chapters: updated },
+                                  });
+                                }}
+                                placeholder="Nama/Judul Jilid (opsional)"
+                                className="flex-1 p-1 bg-white border border-slate-200 rounded text-xs min-w-0"
+                              />
+                              <div className="flex items-center gap-1 shrink-0">
+                                <span className="text-[10px] text-slate-400">Hal:</span>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={vol.pageStart ?? 1}
+                                  onChange={(e) => {
+                                    const val = parseInt(e.target.value) || 1;
+                                    const updated = vols.map((v: any, i: number) =>
+                                      i === idx ? { ...v, pageStart: val } : v
+                                    );
+                                    setEditingItem({
+                                      ...editingItem,
+                                      data: { ...editingItem.data, volumes: updated, chapters: updated },
+                                    });
+                                  }}
+                                  placeholder="Awal"
+                                  className="w-14 p-1 bg-white border border-slate-200 rounded text-xs font-mono text-center"
+                                />
+                                <span className="text-slate-400">-</span>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={vol.pageEnd ?? 100}
+                                  onChange={(e) => {
+                                    const val = parseInt(e.target.value) || 100;
+                                    const updated = vols.map((v: any, i: number) =>
+                                      i === idx ? { ...v, pageEnd: val } : v
+                                    );
+                                    setEditingItem({
+                                      ...editingItem,
+                                      data: { ...editingItem.data, volumes: updated, chapters: updated },
+                                    });
+                                  }}
+                                  placeholder="Akhir"
+                                  className="w-14 p-1 bg-white border border-slate-200 rounded text-xs font-mono text-center"
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const updated = vols
+                                    .filter((_: any, i: number) => i !== idx)
+                                    .map((v: any, i: number) => ({
+                                      ...v,
+                                      volumeNumber: i + 1,
+                                      chapterNumber: i + 1,
+                                    }));
+                                  setEditingItem({
+                                    ...editingItem,
+                                    data: {
+                                      ...editingItem.data,
+                                      volumes: updated,
+                                      chapters: updated,
+                                      totalChapters: updated.length,
+                                    },
+                                  });
+                                }}
+                                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors cursor-pointer shrink-0"
+                                title="Hapus jilid ini"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               )}

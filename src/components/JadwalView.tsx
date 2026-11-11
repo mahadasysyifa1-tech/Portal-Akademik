@@ -53,7 +53,7 @@ interface CalendarViewProps {
   onToggleRules?: (show: boolean) => void;
 }
 
-export const CalendarView: React.FC<CalendarViewProps> = ({
+export const JadwalView: React.FC<CalendarViewProps> = ({
   db,
   onUpdateDb,
   conflicts,
@@ -144,9 +144,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
   return (
     <div className="space-y-4">
-      {/* View Mode Bar & Compact Controls: Single Unified Toolbar */}
-      <div className="bg-white rounded-xl border border-slate-200 px-3 py-2 shadow-2xs flex flex-wrap items-center justify-between gap-2.5">
-        {/* Mode Switcher Tabs: Murid, Guru, Semua */}
+      {/* View Mode Bar & Compact Controls: Sticky Floating Toolbar */}
+      <div className="sticky top-26 z-20 flex flex-wrap items-center justify-between gap-2.5 shadow-2xl transition-all">
+        {/* Mode Switcher: Murid & Guru for all, Semua for Admin */}
         <div className="flex items-center gap-1 bg-slate-100/80 p-1 rounded-lg border border-slate-200/80 shrink-0">
           <button
             id="view-tab-student-week"
@@ -182,29 +182,31 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             <span>Guru</span>
           </button>
 
-          <button
-            id="view-tab-admin-audit"
-            type="button"
-            onClick={() => {
-              setViewMode(ScheduleViewMode.ADMIN_AUDIT);
-              setSelectedEntryData(null);
-            }}
-            className={`px-3 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
-              viewMode === ScheduleViewMode.ADMIN_AUDIT
-                ? 'bg-white text-indigo-700 shadow-2xs font-bold'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
-            }`}
-          >
-            <Grid3X3 className="w-3.5 h-3.5" />
-            <span>Semua</span>
-          </button>
+          {isAdmin && (
+            <button
+              id="view-tab-admin-audit"
+              type="button"
+              onClick={() => {
+                setViewMode(ScheduleViewMode.ADMIN_AUDIT);
+                setSelectedEntryData(null);
+              }}
+              className={`px-3 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                viewMode === ScheduleViewMode.ADMIN_AUDIT
+                  ? 'bg-white text-indigo-700 shadow-2xs font-bold'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+              }`}
+            >
+              <Grid3X3 className="w-3.5 h-3.5" />
+              <span>Semua</span>
+            </button>
+          )}
         </div>
 
         {/* Compact Dynamic Selectors (Kelas / Guru & Periode) */}
         <div className="flex items-center gap-2 flex-wrap">
           {viewMode === ScheduleViewMode.STUDENT_WEEK && (
             <div className="flex items-center gap-1.5">
-              <span className="text-xs font-medium text-slate-500 hidden sm:inline">Kelas:</span>
+              <span className="text-xs font-medium text-slate-100 hidden sm:inline">Kelas:</span>
               <select
                 id="header-class-select"
                 value={selectedClassId}
@@ -222,7 +224,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
           {viewMode === ScheduleViewMode.TEACHER_WEEK && (
             <div className="flex items-center gap-1.5">
-              <span className="text-xs font-medium text-slate-500 hidden sm:inline">Guru:</span>
+              <span className="text-xs font-medium text-slate-100 hidden sm:inline">Guru:</span>
               <select
                 id="header-teacher-select"
                 value={selectedTeacherId}
@@ -231,7 +233,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               >
                 {db.teachers.map((t) => (
                   <option key={t.id} value={t.id}>
-                    {t.panggilan}
+                    {t.panggilan || t.name}
                   </option>
                 ))}
               </select>
@@ -472,3 +474,5 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     </div>
   );
 };
+
+export const CalendarView = JadwalView;

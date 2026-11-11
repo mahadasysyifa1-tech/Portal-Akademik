@@ -144,13 +144,14 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
       const matchAuthor = (b.author || '').toLowerCase().includes(q);
       const matchPublisher = (b.publisher || '').toLowerCase().includes(q);
       const matchCode = (b.displayCode || b.id || '').toLowerCase().includes(q);
+      const matchEdition = (b.edition || '').toLowerCase().includes(q);
       const linkedSubjects = subjectsByBookMap.get(b.id) || [];
       const matchSubject = linkedSubjects.some(
         (s) =>
           s.name.toLowerCase().includes(q) ||
           (s.code && s.code.toLowerCase().includes(q))
       );
-      return matchTitle || matchAlt || matchAuthor || matchPublisher || matchCode || matchSubject;
+      return matchTitle || matchAlt || matchAuthor || matchPublisher || matchEdition || matchCode || matchSubject;
     });
   }, [booksList, search, subjectsByBookMap]);
 
@@ -267,7 +268,14 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
                         <Building className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                         <span className="truncate">
                           <strong className="text-slate-700">Penerbit:</strong> {book.publisher}
-                          {book.edition ? ` (${book.edition})` : ''}
+                        </span>
+                      </div>
+                    )}
+                    {book.edition && (
+                      <div className="flex items-center gap-2">
+                        <BookMarked className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                        <span className="truncate">
+                          <strong className="text-slate-700">Edisi:</strong> {book.edition}
                         </span>
                       </div>
                     )}

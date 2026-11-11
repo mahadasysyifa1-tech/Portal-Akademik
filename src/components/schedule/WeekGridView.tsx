@@ -208,11 +208,11 @@ export const WeekGridView: React.FC<WeekGridViewProps> = ({
       {/* Horizontal Legend Strip at the Bottom */}
       <div className="bg-white px-4 py-3 rounded-2xl border border-slate-200 shadow-2xs space-y-1.5">
         <div className="flex items-center justify-between gap-2 mb-1">
-          <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">
-            {config.colorKey === 'subject' ? 'Keterangan Warna Mata Pelajaran:' : 'Keterangan Warna Kelas:'}
+          <span className="text-[11px] font-bold text-slate-700 tracking-wider">
+            {config.colorKey === 'subject' ? 'Keterangan Warna Mapel:' : 'Keterangan Warna Kelas:'}
           </span>
           <span className="text-[11px] text-amber-700 font-semibold bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200/60">
-            {entitySlots.length} sesi terjadwal
+            {entitySlots.length} sesi
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
