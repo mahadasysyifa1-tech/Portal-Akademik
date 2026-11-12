@@ -395,7 +395,7 @@ export const HomeTab: React.FC<HomeTabProps> = ({
     return (
       <div
         key={key || cClass.occurrence.id}
-        className="rounded-3xl border-2 p-5 sm:p-6 transition-all relative overflow-hidden flex flex-col justify-between shadow-md"
+        className="rounded-3xl border-4 p-5 sm:p-6 transition-all relative overflow-hidden flex flex-col justify-between shadow-md"
         style={{
           borderColor: cColor,
           background: `linear-gradient(135deg, #FFFFFF 0%, ${cColor} 100%)`,
@@ -928,7 +928,7 @@ export const HomeTab: React.FC<HomeTabProps> = ({
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Newspaper className="w-5 h-5 text-amber-600" />
-              <h2 className="text-base sm:text-lg font-bold text-slate-900">
+              <h2 className="text-base sm:text-lg font-bold text-slate-200">
                 Warta &amp; Pengumuman Resmi
               </h2>
             </div>
@@ -978,14 +978,14 @@ export const HomeTab: React.FC<HomeTabProps> = ({
   }
 
   return (
-    <div className="space-y-4 max-w-5xl mx-auto">
+    <div className="space-y-2 max-w-5xl mx-auto">
       {/* Sticky Viewer Selector & Status Floating Bar */}
-      <div className="sticky p-2 top-26 z-20 bg-slate-900/40 shadow-2xl">
+      <div className="sticky top-25 rounded-2xl p-2 z-20 bg-[#024884]/40 shadow-2xl">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
 
           {/* Role Switcher: Only for Admin */}
           {effectiveIsAdmin ? (
-            <div className="bg-slate-50 p-1.5 rounded-2xl border border-slate-200 flex flex-col gap-1.5 shrink-0">
+            <div className="bg-slate-100 p-1.5 rounded-2xl border border-slate-200 flex flex-col gap-1.5 shrink-0">
               <div className="flex items-center gap-1">
                 <button
                   type="button"
@@ -1058,23 +1058,22 @@ export const HomeTab: React.FC<HomeTabProps> = ({
               )}
             </div>
           ) : (
-            <div className="flex items-center gap-2">
-              {auth.role === 'teacher' ? (
-                <div className="flex justify-between">
-                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 font-bold text-xs">
-                    <span className="w-2 h-2 rounded-full bg-amber-500" />
-                    <span>Halaman Anda: {viewerLabel}</span>
-                  </div>
-                  <span className="text-[8px] text-slate-100 font-mono font-medium">
-                    <p>{clockFormatted} WIB</p><p>{todayFormatted}</p>
-                  </span>
-                </div>
-              ) : auth.role === 'student' ? (
-                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-900 font-bold text-xs">
-                  <span className="w-2 h-2 rounded-full bg-indigo-500" />
+            <div className="flex items-center gap-2 width-full">
+              <div className="flex items-center justify-between gap-2 flex-1">
+                <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold border text-xs ${
+                  auth.role === 'teacher' ?
+                    'bg-amber-50 border-amber-200 text-amber-900' :
+                  auth.role === 'student' ?
+                    'bg-indigo-50 border-indigo-200 text-indigo-900' :
+                    'bg-slate-50 border-slate-200 text-slate-900'}
+                `}>
+                  <span className={`w-2 h-2 rounded-full animate-pulse  ${auth.role === 'teacher' ? 'bg-amber-500' : auth.role === 'student' ? 'bg-indigo-500' : 'bg-slate-500'}`} />
                   <span>Halaman Anda: {viewerLabel}</span>
                 </div>
-              ) : null}
+                <div className="px-2 text-xs text-right text-slate-100 font-mono font-medium">
+                  <p>{clockFormatted} WIB</p><p>{todayFormatted}</p>
+                </div>
+              </div>
             </div>
           )}
         </div>
