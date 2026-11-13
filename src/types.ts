@@ -331,10 +331,13 @@ export interface MeetingRecord {
 
 export interface StudentRecord {
   id: string;
+  display_code?: string;
+  displayCode?: string;
   nisn?: string;
   name: string;
   gender?: 'L' | 'P';
   phone?: string;
+  email?: string;
   enrolledClassIds?: string[];
   createdAt?: string;
   updatedAt?: string;

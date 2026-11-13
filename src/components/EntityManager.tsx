@@ -1,51 +1,19 @@
 import React, { useState, useMemo } from 'react';
 import {
-  DatabaseState,
-  Subject,
-  ClassEntity,
-  Room,
-  Teacher,
-  Session,
-  Period,
-  Book,
-  ScheduleRule
-} from '../types';
-import {
   Database,
-  Plus,
-  Edit2,
-  Trash2,
-  BookOpen,
-  GraduationCap,
-  DoorOpen,
-  Users,
-  Clock,
-  CalendarClock,
+  Calendar,
   Layers,
-  Search,
-  X,
-  Check,
-  AlertTriangle,
-  FileCode2,
+  ArrowRight,
+  Database as DatabaseIcon,
   CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
-  Filter,
-  UserCheck
+  AlertCircle
 } from 'lucide-react';
+import { DatabaseState, ScheduleRule } from '../types';
+import { DatabaseSubTab, ENTITY_TABS } from './database/entityConfigs';
+import { EntityTable } from './database/EntityTable';
+import { EntityModal } from './database/EntityModal';
+import { DeleteConfirmModal } from './database/DeleteConfirmModal';
 import { RoleRequestsView } from './admin/RoleRequestsView';
-
-export type DatabaseSubTab =
-  | 'classes'
-  | 'teachers'
-  | 'students'
-  | 'rooms'
-  | 'subjects'
-  | 'books'
-  | 'sessions'
-  | 'periods'
-  | 'materi'
-  | 'requests';
 
 export interface EntityManagerProps {
   db: DatabaseState;
@@ -67,6 +35,7 @@ export interface EntityManagerProps {
   onSelectSubTab?: (subTab: DatabaseSubTab) => void;
 }
 
+// Cross-table cascade deletion handler
 function cascadeDeleteEntity(prev: DatabaseState, type: DatabaseSubTab, idToDelete: string): DatabaseState {
   const next: DatabaseState = { ...prev };
 
@@ -75,6 +44,7 @@ function cascadeDeleteEntity(prev: DatabaseState, type: DatabaseSubTab, idToDele
       next.classes = (prev.classes || []).filter((c) => c.id !== idToDelete);
       next.rules = (prev.rules || []).filter((r) => r.classId !== idToDelete);
       next.syllabusScopes = (prev.syllabusScopes || []).filter((s) => s.class_section_id !== idToDelete);
+      next.enrollments = (prev.enrollments || []).filter((e) => e.classId !== idToDelete);
       break;
     }
     case 'teachers': {
@@ -128,11 +98,17 @@ function cascadeDeleteEntity(prev: DatabaseState, type: DatabaseSubTab, idToDele
         book_ids: (s.book_ids || []).filter((bId) => bId !== idToDelete),
         items: (s.items || []).filter((it) => it.bookId !== idToDelete)
       }));
+      next.syllabusUnits = (prev.syllabusUnits || []).filter((u) => (u.bookId || u.bookCode) !== idToDelete);
       break;
     }
     case 'sessions': {
       next.sessions = (prev.sessions || []).filter((s) => s.id !== idToDelete);
       next.rules = (prev.rules || []).filter((r) => r.sessionId !== idToDelete);
+      // Re-sort remaining sessions chronologically
+      next.sessions = next.sessions
+        .slice()
+        .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''))
+        .map((s, idx) => ({ ...s, order: idx + 1, sort_order: idx + 1 }));
       break;
     }
     case 'periods': {
@@ -141,6 +117,11 @@ function cascadeDeleteEntity(prev: DatabaseState, type: DatabaseSubTab, idToDele
         ...r,
         periodIds: (r.periodIds || []).filter((pid) => pid !== idToDelete)
       }));
+      // Re-sort remaining periods chronologically
+      next.periods = next.periods
+        .slice()
+        .sort((a, b) => (a.startDate || a.start_date || '').localeCompare(b.startDate || b.start_date || ''))
+        .map((p, idx) => ({ ...p, periodNumber: idx + 1, period_number: idx + 1 }));
       break;
     }
     case 'materi': {
@@ -160,167 +141,92 @@ function cascadeDeleteEntity(prev: DatabaseState, type: DatabaseSubTab, idToDele
   return next;
 }
 
-// ----------------------------------------------------------------------------
-// Main Flat Database Browser Component
-// ----------------------------------------------------------------------------
 export const EntityManager: React.FC<EntityManagerProps> = ({
   db,
   onUpdateDb,
-  onExportJson,
-  onImportJson,
+  onNavigateToExportImport,
+  onNavigateToRuleManager,
   initialSubTab = 'classes',
-  onSelectSubTab,
-  onNavigateToExportImport
+  onSelectSubTab
 }) => {
-  const [subTab, setSubTab] = useState<DatabaseSubTab>(initialSubTab);
+  const [activeSubTab, setActiveSubTab] = useState<DatabaseSubTab>(initialSubTab);
   const [search, setSearch] = useState('');
-  const [materiBookFilter, setMateriBookFilter] = useState<string>('all');
-  const [pageSize, setPageSize] = useState<number>(15);
-  const [currentPage, setCurrentPage] = useState<number>(1);
-  const [editingItem, setEditingItem] = useState<{ type: DatabaseSubTab; data: any; isNew: boolean } | null>(null);
-
+  const [materiBookFilter, setMateriBookFilter] = useState('all');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(15);
   const [pendingRequestsCount, setPendingRequestsCount] = useState<number>(0);
 
-  const handleSubTabChange = (t: DatabaseSubTab) => {
-    setSubTab(t);
-    setSearch('');
-    setMateriBookFilter('all');
-    setCurrentPage(1);
-    if (onSelectSubTab) onSelectSubTab(t);
+  // Modal states
+  const [editingItem, setEditingItem] = useState<{
+    type: DatabaseSubTab;
+    data: any;
+    isNew: boolean;
+  } | null>(null);
+
+  const [deleteTarget, setDeleteTarget] = useState<{
+    id: string;
+    name: string;
+    type: DatabaseSubTab;
+  } | null>(null);
+
+  const [toastMessage, setToastMessage] = useState<{ text: string; isError?: boolean } | null>(null);
+
+  const showToast = (text: string, isError = false) => {
+    setToastMessage({ text, isError });
+    setTimeout(() => setToastMessage(null), 3000);
   };
 
-  const TABLE_DEFS = [
-    { id: 'classes' as const, name: 'Kelas', icon: Layers, count: (db.classes || []).length },
-    { id: 'teachers' as const, name: 'Guru', icon: Users, count: (db.teachers || []).length },
-    { id: 'students' as const, name: 'Santri', icon: GraduationCap, count: (db.students || []).length },
-    { id: 'rooms' as const, name: 'Ruang', icon: DoorOpen, count: (db.rooms || []).length },
-    { id: 'subjects' as const, name: 'Mapel', icon: GraduationCap, count: (db.subjects || []).length },
-    { id: 'books' as const, name: 'Buku', icon: BookOpen, count: (db.books || []).length },
-    { id: 'sessions' as const, name: 'Sesi', icon: Clock, count: (db.sessions || []).length },
-    { id: 'periods' as const, name: 'Periode', icon: CalendarClock, count: (db.periods || []).length },
-    { id: 'materi' as const, name: 'Materi', icon: Database, count: (db.syllabusUnits || []).length },
-    { id: 'requests' as const, name: 'Permintaan Akun', icon: UserCheck, count: pendingRequestsCount }
-  ];
+  const handleSubTabChange = (tab: DatabaseSubTab) => {
+    setActiveSubTab(tab);
+    setSearch('');
+    setCurrentPage(1);
+    onSelectSubTab?.(tab);
+  };
 
-  // Helper maps for displaying relational labels
-  const teacherMap = useMemo(() => new Map((db.teachers || []).map((t) => [t.id, t.panggilan || t.name])), [db.teachers]);
-  const roomMap = useMemo(() => new Map((db.rooms || []).map((r) => [r.id, r.name])), [db.rooms]);
-  const subjectMap = useMemo(() => new Map((db.subjects || []).map((s) => [s.id, s.name])), [db.subjects]);
-  const bookMap = useMemo(() => new Map((db.books || []).map((b) => [b.id, b.title])), [db.books]);
-  const classMap = useMemo(() => new Map((db.classes || []).map((c) => [c.id, c.name])), [db.classes]);
-  const studentEnrollmentsMap = useMemo(() => {
-    const map = new Map<string, string[]>();
-    (db.students || []).forEach((s) => {
-      if (s.enrolledClassIds && s.enrolledClassIds.length > 0) {
-        map.set(s.id, [...s.enrolledClassIds]);
-      }
-    });
-    (db.enrollments || []).forEach((e) => {
-      const list = map.get(e.studentId) || [];
-      if (!list.includes(e.classId)) {
-        list.push(e.classId);
-      }
-      map.set(e.studentId, list);
-    });
-    return map;
-  }, [db.students, db.enrollments]);
-
-  // Filter current table records
-  const currentList = useMemo(() => {
-    let list: any[] = [];
-    switch (subTab) {
-      case 'classes': list = db.classes || []; break;
-      case 'teachers': list = db.teachers || []; break;
-      case 'students': list = db.students || []; break;
-      case 'rooms': list = db.rooms || []; break;
-      case 'subjects': list = db.subjects || []; break;
-      case 'books': list = db.books || []; break;
-      case 'sessions': list = db.sessions || []; break;
-      case 'periods': list = db.periods || []; break;
-      case 'materi': {
-        list = db.syllabusUnits || [];
-        if (materiBookFilter !== 'all') {
-          list = list.filter((it) => it.bookId === materiBookFilter);
-        }
-        // sort by book and order
-        list = [...list].sort((a, b) => {
-          if (a.bookId !== b.bookId) return (a.bookId || '').localeCompare(b.bookId || '');
-          return (a.order ?? 0) - (b.order ?? 0);
-        });
-        break;
-      }
-      default: list = [];
-    }
-
-    if (!search.trim()) return list;
-    const q = search.toLowerCase();
-    return list.filter((item) => {
-      const matchId = String(item.id || '').toLowerCase().includes(q);
-      const matchCode = String(item.displayCode || (item as any).display_code || item.code || '').toLowerCase().includes(q);
-      const matchName = String(item.name || item.title || '').toLowerCase().includes(q);
-      const matchAlt = String(item.altTitle || item.department || item.panggilan || '').toLowerCase().includes(q);
-      const matchBook = subTab === 'materi' && String(bookMap.get(item.bookId) || '').toLowerCase().includes(q);
-      const matchBab = subTab === 'materi' && (`bab ${item.order}`.includes(q) || String(item.order).includes(q));
-      const matchNisn = subTab === 'students' && String(item.nisn || '').toLowerCase().includes(q);
-      const matchPhone = subTab === 'students' && String(item.phone || '').toLowerCase().includes(q);
-      return matchId || matchCode || matchName || matchAlt || matchBook || matchBab || matchNisn || matchPhone;
-    });
-  }, [subTab, db, search, materiBookFilter, bookMap]);
-
-  // Pagination calculations
-  const totalPagesCount = Math.max(1, Math.ceil(currentList.length / pageSize));
-  const safeCurrentPage = Math.min(currentPage, totalPagesCount);
-  const pagedList = useMemo(() => {
-    const start = (safeCurrentPage - 1) * pageSize;
-    return currentList.slice(start, start + pageSize);
-  }, [currentList, safeCurrentPage, pageSize]);
-
-  // Open creation modal for current table
-  const handleOpenCreate = () => {
+  // Open Create Modal with clean defaults
+  const handleOpenAdd = () => {
+    const autoSuffix = Date.now().toString(36).slice(-4);
     let initialData: any = {};
-    const autoId = `${subTab.slice(0, 3)}-${Date.now().toString(36).slice(-4)}`;
 
-    switch (subTab) {
+    switch (activeSubTab) {
       case 'classes':
         initialData = {
-          id: autoId,
-          display_code: '',
+          id: `cls-${autoSuffix}`,
+          displayCode: '',
           name: '',
-          grade: 10,
+          grade: 1,
           section: 'A',
-          studentCount: 30,
-          defaultRoomId: (db.rooms && db.rooms[0]) ? db.rooms[0].id : '',
-          onlineClassLink: '',
-          color: '#3B82F6'
+          color: '#3B82F6',
+          defaultRoomId: db.rooms?.[0]?.id || undefined,
+          onlineClassLink: ''
         };
         break;
       case 'teachers':
         initialData = {
-          id: autoId,
-          display_code: '',
+          id: `tch-${autoSuffix}`,
+          displayCode: '',
           name: '',
           panggilan: '',
           email: '',
-          department: 'Diniyyah',
-          maxPeriodsPerWeek: 18,
-          color: '#0284C7'
+          department: 'Diniyah',
+          color: '#4F46E5'
         };
         break;
       case 'students':
         initialData = {
-          id: `stu-${Date.now().toString(36).slice(-4)}`,
-          display_code: '',
+          id: `stu-${autoSuffix}`,
+          displayCode: '',
           name: '',
           nisn: '',
           gender: 'L',
           phone: '',
-          enrolledClassIds: (db.classes && db.classes[0]) ? [db.classes[0].id] : []
+          email: ''
         };
         break;
       case 'rooms':
         initialData = {
-          id: autoId,
-          display_code: '',
+          id: `rm-${autoSuffix}`,
+          displayCode: '',
           name: '',
           building: 'Gedung Utama',
           capacity: 30,
@@ -329,262 +235,286 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
         break;
       case 'subjects':
         initialData = {
-          id: autoId,
-          display_code: '',
+          id: `sub-${autoSuffix}`,
+          displayCode: '',
           name: '',
           color: '#3B82F6',
-          department: 'Diniyyah',
-          defaultTeacherId: (db.teachers && db.teachers[0]) ? db.teachers[0].id : '',
-          defaultRoomId: (db.rooms && db.rooms[0]) ? db.rooms[0].id : '',
-          defaultBookId: (db.books && db.books[0]) ? db.books[0].id : ''
+          department: 'Diniyah',
+          defaultTeacherId: db.teachers?.[0]?.id || undefined,
+          defaultRoomId: db.rooms?.[0]?.id || undefined,
+          defaultBookId: db.books?.[0]?.id || null
         };
         break;
       case 'books':
         initialData = {
-          id: autoId,
-          display_code: '',
+          id: `bk-${autoSuffix}`,
+          displayCode: '',
           title: '',
           altTitle: '',
           author: '',
           publisher: '',
-          edition: 'Jilid 1',
-          totalChapters: 10,
+          edition: 'Cetakan ke-1',
+          totalChapters: 1,
           totalPages: 100,
-          defaultSubjectId: (db.subjects && db.subjects[0]) ? db.subjects[0].id : '',
-          defaultTeacherId: (db.teachers && db.teachers[0]) ? db.teachers[0].id : ''
+          defaultSubjectId: db.subjects?.[0]?.id || undefined,
+          defaultTeacherId: db.teachers?.[0]?.id || undefined,
+          chapters: [],
+          links: []
         };
         break;
       case 'sessions':
         initialData = {
-          id: autoId,
-          display_code: `S${(db.sessions || []).length + 1}`,
+          id: `ses-${autoSuffix}`,
+          displayCode: `S-${(db.sessions || []).length + 1}`,
           name: `Sesi ${(db.sessions || []).length + 1}`,
-          order: (db.sessions || []).length + 1,
           startTime: '07:30',
           endTime: '09:00'
         };
         break;
       case 'periods':
         initialData = {
-          id: autoId,
+          id: `per-${autoSuffix}`,
           name: `Periode ${(db.periods || []).length + 1}`,
-          periodNumber: (db.periods || []).length + 1,
           startDate: new Date().toISOString().slice(0, 10),
-          endDate: new Date().toISOString().slice(0, 10),
+          endDate: new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10),
           description: ''
         };
         break;
       case 'materi':
         initialData = {
-          id: `mat-${Date.now().toString(36).slice(-4)}`,
-          title: '',
-          bookId: materiBookFilter !== 'all' ? materiBookFilter : ((db.books && db.books[0]) ? db.books[0].id : ''),
+          id: `mat-${autoSuffix}`,
+          bookId: materiBookFilter !== 'all' ? materiBookFilter : db.books?.[0]?.id || '',
           order: (db.syllabusUnits || []).length + 1,
-          page_start: 1,
-          page_end: 10,
-          part: '1',
-          no: (db.syllabusUnits || []).length + 1,
-          eno: 10
+          part: 1,
+          title: '',
+          pageStart: 1,
+          pageEnd: 15
         };
         break;
     }
 
-    setEditingItem({ type: subTab, data: initialData, isNew: true });
+    setEditingItem({ type: activeSubTab, data: initialData, isNew: true });
   };
 
-  // Save entity from edit/create modal
-  const handleSaveItem = (e: React.FormEvent) => {
-    e.preventDefault();
+  // Open Edit Modal
+  const handleOpenEdit = (item: any) => {
+    setEditingItem({
+      type: activeSubTab,
+      data: { ...item },
+      isNew: false
+    });
+  };
+
+  // Save entity from Modal
+  const handleSaveItem = (data: any) => {
     if (!editingItem) return;
-    const { type, data, isNew } = editingItem;
+    const { type, isNew } = editingItem;
     const cleanId = String(data.id || '').trim();
+
     if (!cleanId) {
-      alert('Kode / ID entitas wajib diisi.');
+      showToast('ID Entitas tidak boleh kosong.', true);
       return;
     }
 
-    const formattedData: any = { ...data, id: cleanId };
-    if (type === 'classes') {
-      formattedData.grade = Number(data.grade) || 1;
-      formattedData.studentCount = Number(data.studentCount ?? data.student_count) || 0;
-      formattedData.student_count = formattedData.studentCount;
-      formattedData.defaultRoomId = data.defaultRoomId || undefined;
-      formattedData.default_room_id = data.defaultRoomId || null;
-    } else if (type === 'teachers') {
-      formattedData.maxPeriodsPerWeek = Number(data.maxPeriodsPerWeek ?? data.max_periods_per_week) || 18;
-      formattedData.max_periods_per_week = formattedData.maxPeriodsPerWeek;
-    } else if (type === 'students') {
-      formattedData.nisn = data.nisn || undefined;
-      formattedData.gender = data.gender || 'L';
-      formattedData.phone = data.phone || undefined;
-      const enrolledClassIds: string[] = Array.isArray(data.enrolledClassIds) ? data.enrolledClassIds : [];
-      formattedData.enrolledClassIds = enrolledClassIds;
-    } else if (type === 'rooms') {
-      formattedData.capacity = Number(data.capacity) || 30;
-    } else if (type === 'subjects') {
-      formattedData.defaultTeacherId = data.defaultTeacherId || undefined;
-      formattedData.default_teacher_id = data.defaultTeacherId || null;
-      formattedData.defaultRoomId = data.defaultRoomId || undefined;
-      formattedData.default_room_id = data.defaultRoomId || null;
-      formattedData.default_book = data.defaultBookId || null;
-      formattedData.defaultBookId = data.defaultBookId || null;
-      formattedData.default_book_id = data.defaultBookId || null;
-    } else if (type === 'books') {
-      formattedData.totalChapters = Number(data.totalChapters) || 0;
-      formattedData.totalPages = Number(data.totalPages) || 0;
-      formattedData.defaultSubjectId = data.defaultSubjectId || undefined;
-      formattedData.defaultTeacherId = data.defaultTeacherId || undefined;
-    } else if (type === 'sessions') {
-      formattedData.order = Number(data.order ?? data.sort_order) || 1;
-      formattedData.sort_order = formattedData.order;
-    } else if (type === 'periods') {
-      formattedData.periodNumber = Number(data.periodNumber ?? data.period_number) || 1;
-      formattedData.period_number = formattedData.periodNumber;
-    } else if (type === 'materi') {
-      formattedData.order = Number(data.order) || 1;
-      formattedData.no = formattedData.order;
-      formattedData.page_start = data.page_start ? Number(data.page_start) : undefined;
-      formattedData.page_end = data.page_end ? Number(data.page_end) : undefined;
-      formattedData.pageStart = formattedData.page_start;
-      formattedData.pageEnd = formattedData.page_end;
+    const formatted: any = { ...data, id: cleanId };
+
+    // Format displayCode without forced fallback to ID
+    if (formatted.displayCode !== undefined) {
+      formatted.display_code = formatted.displayCode;
     }
 
     onUpdateDb((prev) => {
+      // Validate uniqueness on create
       if (isNew) {
-        // Prevent duplicate IDs
-        const existingList = type === 'materi' ? (prev.syllabusUnits || []) : ((prev as any)[type] || []);
-        if (existingList.some((item: any) => item.id === cleanId)) {
-          alert(`ID/Kode "${cleanId}" sudah digunakan. Gunakan ID lain.`);
+        const targetList =
+          type === 'materi'
+            ? prev.syllabusUnits || []
+            : (prev as any)[type] || [];
+        if (targetList.some((it: any) => it.id === cleanId)) {
+          showToast(`ID "${cleanId}" sudah digunakan. Gunakan ID lain.`, true);
           return prev;
         }
-        if (type === 'materi') {
-          return {
-            ...prev,
-            syllabusUnits: [...existingList, formattedData]
-          };
-        }
-        if (type === 'students') {
-          const enrolledClassIds: string[] = formattedData.enrolledClassIds || [];
-          const otherEnrollments = (prev.enrollments || []).filter((e) => e.studentId !== cleanId);
-          const newEnrollments = enrolledClassIds.map((cid) => ({
-            classId: cid,
-            studentId: cleanId,
-            active: 1
-          }));
-          return {
-            ...prev,
-            students: [...existingList, formattedData],
-            enrollments: [...otherEnrollments, ...newEnrollments]
-          };
-        }
-        return {
-          ...prev,
-          [type]: [...existingList, formattedData]
-        };
-      } else {
-        if (type === 'students') {
-          const enrolledClassIds: string[] = formattedData.enrolledClassIds || [];
-          const otherEnrollments = (prev.enrollments || []).filter((e) => e.studentId !== cleanId);
-          const newEnrollments = enrolledClassIds.map((cid) => ({
-            classId: cid,
-            studentId: cleanId,
-            active: 1
-          }));
-          const existingStudents = prev.students || [];
-          return {
-            ...prev,
-            students: existingStudents.map((s) => (s.id === cleanId ? { ...s, ...formattedData } : s)),
-            enrollments: [...otherEnrollments, ...newEnrollments]
-          };
-        }
-        const targetKey = type === 'materi' ? 'syllabusUnits' : type;
-        const currentList = (prev as any)[targetKey] || [];
-        return {
-          ...prev,
-          [targetKey]: currentList.map((item: any) =>
-            item.id === cleanId ? { ...item, ...formattedData } : item
-          )
-        };
       }
+
+      const next = { ...prev };
+
+      // 1. Sessions: Automatic Chronological Sorting
+      if (type === 'sessions') {
+        const existing = (prev.sessions || []).filter((s) => s.id !== cleanId);
+        const allSessions = [...existing, formatted];
+        allSessions.sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+        next.sessions = allSessions.map((s, idx) => ({
+          ...s,
+          order: idx + 1,
+          sort_order: idx + 1
+        }));
+        return next;
+      }
+
+      // 2. Periods: Automatic Chronological Sorting
+      if (type === 'periods') {
+        const existing = (prev.periods || []).filter((p) => p.id !== cleanId);
+        const allPeriods = [...existing, formatted];
+        allPeriods.sort((a, b) =>
+          (a.startDate || a.start_date || '').localeCompare(b.startDate || b.start_date || '')
+        );
+        next.periods = allPeriods.map((p, idx) => ({
+          ...p,
+          periodNumber: idx + 1,
+          period_number: idx + 1
+        }));
+        return next;
+      }
+
+      // 3. Students: Update student record WITHOUT touching enrollments
+      if (type === 'students') {
+        const existingStudents = prev.students || [];
+        if (isNew) {
+          next.students = [...existingStudents, formatted];
+        } else {
+          next.students = existingStudents.map((s) => (s.id === cleanId ? { ...s, ...formatted } : s));
+        }
+        return next;
+      }
+
+      // 4. Books: Update book with chapters and links
+      if (type === 'books') {
+        const existingBooks = prev.books || [];
+        if (isNew) {
+          next.books = [...existingBooks, formatted];
+        } else {
+          next.books = existingBooks.map((b) => (b.id === cleanId ? { ...b, ...formatted } : b));
+        }
+        return next;
+      }
+
+      // 5. Materi: Target syllabusUnits
+      if (type === 'materi') {
+        const existingUnits = prev.syllabusUnits || [];
+        if (isNew) {
+          next.syllabusUnits = [...existingUnits, formatted];
+        } else {
+          next.syllabusUnits = existingUnits.map((u) => (u.id === cleanId ? { ...u, ...formatted } : u));
+        }
+        return next;
+      }
+
+      // 6. Generic Entities (classes, teachers, rooms, subjects)
+      const currentList = (prev as any)[type] || [];
+      if (isNew) {
+        next[type as keyof DatabaseState] = [...currentList, formatted] as any;
+      } else {
+        next[type as keyof DatabaseState] = currentList.map((item: any) =>
+          item.id === cleanId ? { ...item, ...formatted } : item
+        ) as any;
+      }
+
+      return next;
     });
 
     setEditingItem(null);
+    showToast(isNew ? 'Data berhasil ditambahkan.' : 'Perubahan data berhasil disimpan.');
   };
 
-  // Delete entity with cross-table warning & confirmation
-  const handleDeleteItem = (id: string, name: string) => {
-    if (window.confirm(`Hapus ${name} (${id})?\n\nSemua relasi di tabel lain (jadwal, lingkup silabus, guru default, dll.) akan otomatis disinkronkan.`)) {
-      onUpdateDb((prev) => cascadeDeleteEntity(prev, subTab, id));
-    }
+  // Handle Delete Confirmation
+  const handleDeleteConfirm = () => {
+    if (!deleteTarget) return;
+    const { id, type } = deleteTarget;
+    onUpdateDb((prev) => cascadeDeleteEntity(prev, type, id));
+    showToast('Data berhasil dihapus beserta sinkronisasi relasinya.');
+    setDeleteTarget(null);
   };
 
   return (
     <div className="space-y-4">
-      {/* Top Banner & Tab Navigation */}
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-2.5 rounded-xl shadow-lg border text-xs font-bold animate-in fade-in slide-in-from-bottom-3 duration-200 ${
+            toastMessage.isError
+              ? 'bg-rose-50 border-rose-200 text-rose-800'
+              : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+          }`}
+        >
+          {toastMessage.isError ? (
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+          ) : (
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          )}
+          <span>{toastMessage.text}</span>
+        </div>
+      )}
+
+      {/* Top Banner & Quick Hub Navigation */}
       <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-indigo-50 border border-indigo-200/70 text-indigo-700">
-              <Database className="w-5 h-5" />
+            <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-700 shadow-2xs shrink-0">
+              <DatabaseIcon className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-slate-900">Penjelajah Database Induk</h2>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Tabel database yang terhubung real-time ke Turso Cloud dengan sinkronisasi relasi otomatis.
+              <h2 className="text-base font-bold text-slate-900">Pusat Basis Data Master</h2>
+              <p className="text-xs text-slate-500">
+                Penyelarasan tabel referensi akademik, kitab ajar, ruang, pengajar, dan sesi KBM.
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 flex-wrap shrink-0">
+          <div className="flex flex-wrap items-center gap-2">
+            {onNavigateToRuleManager && (
+              <button
+                type="button"
+                onClick={onNavigateToRuleManager}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 rounded-lg text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+              >
+                <Layers className="w-3.5 h-3.5 text-amber-700" />
+                <span>Aturan Jadwal</span>
+                <ArrowRight className="w-3 h-3 text-amber-700" />
+              </button>
+            )}
+
             {onNavigateToExportImport && (
               <button
                 type="button"
                 onClick={onNavigateToExportImport}
-                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer shadow-2xs"
-                title="Buka menu backup dan restore JSON database"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-800 rounded-lg text-xs font-bold transition-colors cursor-pointer shadow-2xs"
               >
-                <FileCode2 className="w-3.5 h-3.5 text-indigo-600" />
-                <span>JSON Backup</span>
-              </button>
-            )}
-
-            {subTab !== 'requests' && (
-              <button
-                type="button"
-                onClick={handleOpenCreate}
-                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors cursor-pointer shadow-2xs"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Tambah {TABLE_DEFS.find((t) => t.id === subTab)?.name}</span>
+                <span>Ekspor &amp; Impor</span>
               </button>
             )}
           </div>
         </div>
 
-        {/* Subtabs Bar */}
-        <div className="flex items-center gap-1.5 overflow-x-auto mt-4 pt-3 border-t border-slate-100 pb-1 scrollbar-thin">
-          {TABLE_DEFS.map((tab) => {
+        {/* Tab Navigation Segmented Bar */}
+        <div className="mt-4 pt-3 border-t border-slate-100 flex items-center gap-1 overflow-x-auto pb-1 scrollbar-thin">
+          {ENTITY_TABS.map((tab) => {
+            const count = tab.id === 'requests' ? pendingRequestsCount : tab.getCount(db);
+            const isActive = activeSubTab === tab.id;
             const Icon = tab.icon;
-            const isActive = subTab === tab.id;
+
             return (
               <button
                 key={tab.id}
                 type="button"
                 onClick={() => handleSubTabChange(tab.id)}
-                className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl transition-all shrink-0 cursor-pointer ${
+                className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
                   isActive
-                    ? 'bg-indigo-600 text-white shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'bg-transparent text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                 }`}
               >
-                <Icon className="w-3.5 h-3.5" />
+                <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-white' : 'text-slate-500'}`} />
                 <span>{tab.name}</span>
                 <span
-                  className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
-                    isActive ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'
+                  className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full font-bold ${
+                    isActive
+                      ? 'bg-indigo-500 text-white'
+                      : 'bg-slate-100 text-slate-600'
                   }`}
                 >
-                  {tab.count}
+                  {count}
                 </span>
               </button>
             );
@@ -592,1599 +522,47 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
         </div>
       </div>
 
-      {/* Flat Database Table View or Requests View */}
-      {subTab === 'requests' ? (
+      {/* Main Tab Content */}
+      {activeSubTab === 'requests' ? (
         <RoleRequestsView onRefreshCount={setPendingRequestsCount} />
       ) : (
-        <div className="space-y-3">
-        {/* Controls Bar */}
-        <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-2xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-2 flex-1">
-            <div className="relative flex-1 max-w-md">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setCurrentPage(1);
-                }}
-                placeholder={
-                  subTab === 'materi'
-                    ? 'Cari ID materi, judul bab, nomor bab, atau nama kitab...'
-                    : `Cari dalam tabel ${TABLE_DEFS.find((t) => t.id === subTab)?.name}...`
-                }
-                className="w-full text-xs pl-8 pr-7 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-400"
-              />
-              {search && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearch('');
-                    setCurrentPage(1);
-                  }}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
-                  title="Hapus pencarian"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-
-            {/* Quick Book Filter for Materi */}
-            {subTab === 'materi' && (
-              <div className="flex items-center gap-1.5 shrink-0">
-                <BookOpen className="w-3.5 h-3.5 text-slate-400" />
-                <select
-                  value={materiBookFilter}
-                  onChange={(e) => {
-                    setMateriBookFilter(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                  className="text-xs py-2 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer max-w-[200px] truncate"
-                >
-                  <option value="all">Semua Kitab ({db.books?.length || 0})</option>
-                  {(db.books || []).map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.title}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-          </div>
-
-          <div className="text-xs text-slate-500 font-medium shrink-0 self-end sm:self-auto">
-            Ditemukan <strong className="text-slate-800">{currentList.length}</strong> data
-          </div>
-        </div>
-
-        {/* Flat Database Table */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50/90 border-b border-slate-200 text-slate-600 font-bold uppercase text-[11px]">
-                <tr>
-                  <th className="px-3 py-2.5 w-12 text-center">No</th>
-                  <th className="px-3 py-2.5 w-30 whitespace-normal font-mono">ID Sistem</th>
-                  <th className="px-3 py-2.5 font-mono">Kode</th>
-                  <th className="px-3 py-2.5">Nama / Judul</th>
-                  {subTab === 'classes' && (
-                    <>
-                      <th className="px-3 py-2.5 text-center">Tingkat</th>
-                      <th className="px-3 py-2.5 text-center">Bagian</th>
-                      <th className="px-3 py-2.5 text-center">Santri</th>
-                      <th className="px-3 py-2.5">Ruang Default</th>
-                    </>
-                  )}
-                  {subTab === 'teachers' && (
-                    <>
-                      <th className="px-3 py-2.5">Panggilan</th>
-                      <th className="px-3 py-2.5">Departemen</th>
-                      <th className="px-3 py-2.5 text-center">Beban Mgg</th>
-                      <th className="px-3 py-2.5">Email</th>
-                    </>
-                  )}
-                  {subTab === 'students' && (
-                    <>
-                      <th className="px-3 py-2.5">NISN</th>
-                      <th className="px-3 py-2.5 text-center">Gender</th>
-                      <th className="px-3 py-2.5">Kelas Terdaftar</th>
-                      <th className="px-3 py-2.5">Kontak</th>
-                    </>
-                  )}
-                  {subTab === 'rooms' && (
-                    <>
-                      <th className="px-3 py-2.5">Gedung</th>
-                      <th className="px-3 py-2.5 text-center">Kapasitas</th>
-                      <th className="px-3 py-2.5">Tipe Ruangan</th>
-                    </>
-                  )}
-                  {subTab === 'subjects' && (
-                    <>
-                      <th className="px-3 py-2.5">Departemen</th>
-                      <th className="px-3 py-2.5">Guru Default</th>
-                      <th className="px-3 py-2.5">Buku Default</th>
-                    </>
-                  )}
-                  {subTab === 'books' && (
-                    <>
-                      <th className="px-3 py-2.5">Judul Alt</th>
-                      <th className="px-3 py-2.5">Pengarang</th>
-                      <th className="px-3 py-2.5">Edisi</th>
-                      <th className="px-3 py-2.5 text-center">Jilid / Hal</th>
-                      <th className="px-3 py-2.5">Mapel Terkait</th>
-                    </>
-                  )}
-                  {subTab === 'sessions' && (
-                    <>
-                      <th className="px-3 py-2.5 text-center">Urutan</th>
-                      <th className="px-3 py-2.5 text-center">Jam Mulai</th>
-                      <th className="px-3 py-2.5 text-center">Jam Selesai</th>
-                    </>
-                  )}
-                  {subTab === 'periods' && (
-                    <>
-                      <th className="px-3 py-2.5 text-center">No Periode</th>
-                      <th className="px-3 py-2.5 text-center">Mulai</th>
-                      <th className="px-3 py-2.5 text-center">Selesai</th>
-                    </>
-                  )}
-                  {subTab === 'materi' && (
-                    <>
-                      <th className="px-3 py-2.5">Buku / Kitab Acuan</th>
-                      <th className="px-3 py-2.5 text-center">Urutan / Bab</th>
-                      <th className="px-3 py-2.5 text-center">Rentang Hal</th>
-                      <th className="px-3 py-2.5 text-center">Bobot</th>
-                    </>
-                  )}
-                  <th className="px-3 py-2.5 w-24 text-right">Aksi</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200">
-                {pagedList.length === 0 ? (
-                  <tr>
-                    <td colSpan={12} className="px-4 py-8 text-center text-slate-400">
-                      Tidak ada data yang ditemukan.
-                    </td>
-                  </tr>
-                ) : (
-                  pagedList.map((item, index) => {
-                    const rowNumber = (safeCurrentPage - 1) * pageSize + index + 1;
-                    const codeDisplay = item.displayCode || (item as any).display_code || item.code || item.id;
-                    return (
-                      <tr key={item.id || index} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="px-3 py-2.5 text-center font-mono text-slate-400 text-[11px]">
-                          {rowNumber}
-                        </td>
-                        <td className="px-3 py-2.5 text-slate-400 whitespace-normal font-mono text-[11px] font-semibold">
-                          {item.id}
-                        </td>
-                        <td className="px-3 py-2.5 font-mono text-xs">
-                          <span className="inline-flex items-center px-2 py-0.5 rounded bg-indigo-50 border border-indigo-200/80 text-indigo-700 font-bold">
-                            {codeDisplay}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2.5 font-bold text-slate-900">
-                          {item.name || item.title}
-                        </td>
-
-                        {/* Classes Columns */}
-                        {subTab === 'classes' && (
-                          <>
-                            <td className="px-3 py-2.5 text-center">Kelas {item.grade}</td>
-                            <td className="px-3 py-2.5 text-center">{item.section}</td>
-                            <td className="px-3 py-2.5 text-center">{item.studentCount || item.student_count || 0}</td>
-                            <td className="px-3 py-2.5 text-slate-600">
-                              {roomMap.get(item.defaultRoomId || item.default_room_id) || '-'}
-                            </td>
-                          </>
-                        )}
-
-                        {/* Teachers Columns */}
-                        {subTab === 'teachers' && (
-                          <>
-                            <td className="px-3 py-2.5 text-slate-700">{item.panggilan || '-'}</td>
-                            <td className="px-3 py-2.5 text-slate-600">{item.department || '-'}</td>
-                            <td className="px-3 py-2.5 text-center font-semibold text-indigo-700">
-                              {item.maxPeriodsPerWeek || item.max_periods_per_week || 18} jam
-                            </td>
-                            <td className="px-3 py-2.5 text-slate-500 font-mono">{item.email || '-'}</td>
-                          </>
-                        )}
-
-                        {/* Students Columns */}
-                        {subTab === 'students' && (
-                          <>
-                            <td className="px-3 py-2.5 font-mono text-slate-600">{item.nisn || '-'}</td>
-                            <td className="px-3 py-2.5 text-center">
-                              <span
-                                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                  item.gender === 'P'
-                                    ? 'bg-pink-50 text-pink-700 border border-pink-200'
-                                    : 'bg-blue-50 text-blue-700 border border-blue-200'
-                                }`}
-                              >
-                                {item.gender === 'P' ? 'Akhwat (P)' : 'Ikhwan (L)'}
-                              </span>
-                            </td>
-                            <td className="px-3 py-2.5">
-                              <div className="flex flex-wrap gap-1">
-                                {(() => {
-                                  const classIds = item.enrolledClassIds || studentEnrollmentsMap.get(item.id) || [];
-                                  if (classIds.length === 0) {
-                                    return <span className="text-slate-400 italic">Belum terdaftar</span>;
-                                  }
-                                  return classIds.map((cid: string) => (
-                                    <span
-                                      key={cid}
-                                      className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200"
-                                    >
-                                      {classMap.get(cid) || cid}
-                                    </span>
-                                  ));
-                                })()}
-                              </div>
-                            </td>
-                            <td className="px-3 py-2.5 text-slate-500 font-mono">{item.phone || '-'}</td>
-                          </>
-                        )}
-
-                        {/* Rooms Columns */}
-                        {subTab === 'rooms' && (
-                          <>
-                            <td className="px-3 py-2.5 text-slate-600">{item.building || '-'}</td>
-                            <td className="px-3 py-2.5 text-center">{item.capacity || 30}</td>
-                            <td className="px-3 py-2.5 text-slate-600">{item.type || 'Standard'}</td>
-                          </>
-                        )}
-
-                        {/* Subjects Columns */}
-                        {subTab === 'subjects' && (
-                          <>
-                            <td className="px-3 py-2.5 text-slate-600">{item.department || '-'}</td>
-                            <td className="px-3 py-2.5 text-slate-700 font-medium">
-                              {teacherMap.get(item.defaultTeacherId || item.default_teacher_id) || '-'}
-                            </td>
-                            <td className="px-3 py-2.5 text-slate-700 font-medium">
-                              {bookMap.get(item.default_book || item.defaultBookId || item.primary_book_code) || '-'}
-                            </td>
-                          </>
-                        )}
-
-                        {/* Books Columns */}
-                        {subTab === 'books' && (
-                          <>
-                            <td className="px-3 py-2.5 text-slate-600">{item.altTitle || '-'}</td>
-                            <td className="px-3 py-2.5 text-slate-600">{item.author || '-'}</td>
-                            <td className="px-3 py-2.5 text-slate-700 font-medium">
-                              {item.edition ? (
-                                <span className="px-1.5 py-0.5 rounded text-[11px] bg-slate-100 text-slate-700 border border-slate-200">
-                                  {item.edition}
-                                </span>
-                              ) : (
-                                <span className="text-slate-400 italic text-[11px]">-</span>
-                              )}
-                            </td>
-                            <td className="px-3 py-2.5 text-center font-mono">
-                              {(() => {
-                                const chapters = item.chapters || [];
-                                const totalJilid = chapters.length > 0 ? chapters.length : (item.totalChapters || 0);
-                                const cumulativePages = chapters.length > 0
-                                  ? chapters.reduce((sum: number, ch: any) => sum + (Number(ch.pageEnd ?? ch.page_end) || 0), 0)
-                                  : (item.totalPages || 0);
-                                return `${totalJilid} jilid / ${cumulativePages} hal`;
-                              })()}
-                            </td>
-                            <td className="px-3 py-2.5 text-slate-700">
-                              {subjectMap.get(item.defaultSubjectId) || '-'}
-                            </td>
-                          </>
-                        )}
-
-                        {/* Sessions Columns */}
-                        {subTab === 'sessions' && (
-                          <>
-                            <td className="px-3 py-2.5 text-center font-mono">{item.order || item.sort_order || 1}</td>
-                            <td className="px-3 py-2.5 text-center font-mono text-emerald-700">{item.startTime || item.start_time}</td>
-                            <td className="px-3 py-2.5 text-center font-mono text-rose-700">{item.endTime || item.end_time}</td>
-                          </>
-                        )}
-
-                        {/* Periods Columns */}
-                        {subTab === 'periods' && (
-                          <>
-                            <td className="px-3 py-2.5 text-center font-mono">{item.periodNumber || item.period_number || 1}</td>
-                            <td className="px-3 py-2.5 text-center font-mono">{item.startDate || item.start_date}</td>
-                            <td className="px-3 py-2.5 text-center font-mono">{item.endDate || item.end_date}</td>
-                          </>
-                        )}
-
-                        {/* Materi Columns */}
-                        {subTab === 'materi' && (
-                          <>
-                            <td className="px-3 py-2.5 text-slate-700 font-medium">
-                              <span className="inline-flex items-center gap-1.5">
-                                <BookOpen className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                                <span>{bookMap.get(item.bookId) || item.bookId || '-'}</span>
-                              </span>
-                            </td>
-                            <td className="px-3 py-2.5 text-center font-mono font-semibold text-slate-800">
-                              Bab {item.order ?? 1}
-                            </td>
-                            <td className="px-3 py-2.5 text-center font-mono text-slate-600">
-                              {item.page_start
-                                ? String(item.page_start) === String(item.page_end)
-                                  ? `Hal ${item.page_start}`
-                                  : `Hal ${item.page_start}–${item.page_end}`
-                                : '-'}
-                            </td>
-                            <td className="px-3 py-2.5 text-center font-mono text-indigo-700 font-semibold">
-                              {typeof item.page_end === 'number' && typeof item.page_start === 'number'
-                                ? `${item.page_end - item.page_start + 1} hal`
-                                : item.eno
-                                ? `${item.eno} hal`
-                                : '1 hal'}
-                            </td>
-                          </>
-                        )}
-
-                        {/* Row Actions */}
-                        <td className="px-3 py-2.5 text-right">
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setEditingItem({
-                                  type: subTab,
-                                  data: { ...item, _originalId: item.id },
-                                  isNew: false
-                                })
-                              }
-                              className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
-                              title="Edit Entitas"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteItem(item.id, item.name || item.title || item.id)}
-                              className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                              title="Hapus Entitas"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Pagination & Row Count Limit Bar */}
-          <div className="px-4 py-3 bg-slate-50/80 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-3">
-              <span className="text-slate-500">
-                Menampilkan{' '}
-                <strong className="text-slate-700">
-                  {currentList.length === 0 ? 0 : (safeCurrentPage - 1) * pageSize + 1}
-                </strong>{' '}
-                –{' '}
-                <strong className="text-slate-700">
-                  {Math.min(safeCurrentPage * pageSize, currentList.length)}
-                </strong>{' '}
-                dari <strong className="text-slate-700">{currentList.length}</strong> entitas
-              </span>
-
-              <div className="h-4 w-px bg-slate-200 hidden sm:block" />
-
-              <div className="flex items-center gap-1.5 text-slate-500">
-                <span>Baris per halaman:</span>
-                <select
-                  value={pageSize}
-                  onChange={(e) => {
-                    setPageSize(Number(e.target.value));
-                    setCurrentPage(1);
-                  }}
-                  className="bg-white border border-slate-200 rounded px-2 py-0.5 text-xs text-slate-700 font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer shadow-2xs"
-                >
-                  <option value={15}>15</option>
-                  <option value={25}>25</option>
-                  <option value={50}>50</option>
-                  <option value={100}>100</option>
-                </select>
-              </div>
-            </div>
-
-            {totalPagesCount > 1 && (
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  disabled={safeCurrentPage <= 1}
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  className="p-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs"
-                  title="Halaman Sebelumnya"
-                >
-                  <ChevronLeft className="w-3.5 h-3.5" />
-                </button>
-
-                <div className="flex items-center gap-1 px-2 text-xs font-semibold text-slate-700">
-                  <span>Halaman</span>
-                  <span className="bg-white px-2 py-0.5 border border-slate-200 rounded text-indigo-700 font-bold shadow-2xs">
-                    {safeCurrentPage}
-                  </span>
-                  <span className="text-slate-400">dari {totalPagesCount}</span>
-                </div>
-
-                <button
-                  type="button"
-                  disabled={safeCurrentPage >= totalPagesCount}
-                  onClick={() => setCurrentPage((p) => Math.min(totalPagesCount, p + 1))}
-                  className="p-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs"
-                  title="Halaman Selanjutnya"
-                >
-                  <ChevronRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+        <EntityTable
+          subTab={activeSubTab}
+          db={db}
+          search={search}
+          onSearchChange={setSearch}
+          materiBookFilter={materiBookFilter}
+          onMateriBookFilterChange={setMateriBookFilter}
+          currentPage={currentPage}
+          onPageChange={setCurrentPage}
+          pageSize={pageSize}
+          onPageSizeChange={setPageSize}
+          onAddNew={handleOpenAdd}
+          onEdit={handleOpenEdit}
+          onDelete={(id, name) => setDeleteTarget({ id, name, type: activeSubTab })}
+        />
       )}
 
-      {/* Flat Create / Edit Modal */}
-      {editingItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-lg w-full p-5 space-y-3.5 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <Database className="w-4 h-4 text-indigo-600" />
-                <span>
-                  {editingItem.isNew ? 'Tambah' : 'Edit'}{' '}
-                  {TABLE_DEFS.find((t) => t.id === editingItem.type)?.name}
-                </span>
-                {/* Compact Read-only System ID Pill */}
-                <div className="flex items-center justify-between px-3 gap-2 rounded-lg text-slate-600">
-                  <span className="text-[11px] font-semibold text-slate-500">ID Entitas:</span>
-                  <span className="font-mono text-xs font-bold text-slate-600 bg-slate-200 px-2 py-0.5 rounded shadow-s">
-                    {editingItem.data.id || '(Otomatis)'}
-                  </span>
-                </div>
+      {/* Entity Modal (Centered Create / Edit Form) */}
+      <EntityModal
+        isOpen={!!editingItem}
+        onClose={() => setEditingItem(null)}
+        onSave={handleSaveItem}
+        subTab={editingItem?.type || activeSubTab}
+        initialData={editingItem?.data || {}}
+        isNew={editingItem?.isNew ?? false}
+        db={db}
+      />
 
-              </h3>
-              <button
-                type="button"
-                onClick={() => setEditingItem(null)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveItem} className="space-y-3 text-xs">
-
-              {/* Display Code (for all except materi and periods) */}
-              {editingItem.type !== 'materi' && editingItem.type !== 'periods' && (
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">
-                    Kode Singkatan (Display Code)
-                  </label>
-                  <input
-                    type="text"
-                    value={editingItem.data.displayCode || (editingItem.data as any).display_code || editingItem.data.code || editingItem.data.id || ''}
-                    onChange={(e) =>
-                      setEditingItem({
-                        ...editingItem,
-                        data: {
-                          ...editingItem.data,
-                          displayCode: e.target.value,
-                          display_code: e.target.value,
-                          code: e.target.value
-                        }
-                      })
-                    }
-                    placeholder="Contoh: 10-A / Ust. Ridwan / ARB / R-101 / S1..."
-                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono text-xs"
-                  />
-                  <p className="text-[10px] text-slate-400 mt-0.5">
-                    Label singkatan untuk tampilan tabel, kalender, dan jadwal. Bebas diubah kapan saja.
-                  </p>
-                </div>
-              )}
-
-              {/* Name / Title */}
-              {editingItem.type !== 'materi' && (
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">
-                    {editingItem.type === 'books' ? 'Judul Buku *' : 'Nama / Judul *'}
-                  </label>
-                  <input
-                    type="text"
-                    value={editingItem.data.name || editingItem.data.title || ''}
-                    onChange={(e) =>
-                      setEditingItem({
-                        ...editingItem,
-                        data: {
-                          ...editingItem.data,
-                          name: e.target.value,
-                          title: e.target.value
-                        }
-                      })
-                    }
-                    required
-                    placeholder="Nama entitas..."
-                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 text-xs"
-                  />
-                </div>
-              )}
-
-              {/* 1. Specific fields for Classes */}
-              {editingItem.type === 'classes' && (
-                <div className="space-y-2.5">
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Tingkat (Grade)</label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={editingItem.data.grade ?? 10}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, grade: parseInt(e.target.value) || 1 }
-                          })
-                        }
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Rombel / Bagian</label>
-                      <input
-                        type="text"
-                        value={editingItem.data.section || 'A'}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, section: e.target.value }
-                          })
-                        }
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Jumlah Santri</label>
-                      <input
-                        type="number"
-                        min={0}
-                        value={editingItem.data.studentCount ?? editingItem.data.student_count ?? 30}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: {
-                              ...editingItem.data,
-                              studentCount: parseInt(e.target.value) || 0,
-                              student_count: parseInt(e.target.value) || 0
-                            }
-                          })
-                        }
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Ruang Default</label>
-                      <select
-                        value={editingItem.data.defaultRoomId || editingItem.data.default_room_id || ''}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: {
-                              ...editingItem.data,
-                              defaultRoomId: e.target.value || undefined,
-                              default_room_id: e.target.value || null
-                            }
-                          })
-                        }
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      >
-                        <option value="">-- Tanpa Ruang Default --</option>
-                        {(db.rooms || []).map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {r.name} [{r.id}]
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Warna Badge</label>
-                      <div className="flex items-center gap-1.5">
-                        <input
-                          type="color"
-                          value={editingItem.data.color || '#3B82F6'}
-                          onChange={(e) =>
-                            setEditingItem({
-                              ...editingItem,
-                              data: { ...editingItem.data, color: e.target.value }
-                            })
-                          }
-                          className="w-8 h-8 rounded border border-slate-200 cursor-pointer p-0.5 bg-slate-50 shrink-0"
-                        />
-                        <input
-                          type="text"
-                          value={editingItem.data.color || '#3B82F6'}
-                          onChange={(e) =>
-                            setEditingItem({
-                              ...editingItem,
-                              data: { ...editingItem.data, color: e.target.value }
-                            })
-                          }
-                          className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">Link Online Class (Meet / Zoom)</label>
-                    <input
-                      type="url"
-                      value={editingItem.data.onlineClassLink || editingItem.data.online_class_link || ''}
-                      onChange={(e) =>
-                        setEditingItem({
-                          ...editingItem,
-                          data: {
-                            ...editingItem.data,
-                            onlineClassLink: e.target.value,
-                            online_class_link: e.target.value
-                          }
-                        })
-                      }
-                      placeholder="https://meet.google.com/..."
-                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* 2. Specific fields for Teachers */}
-              {editingItem.type === 'teachers' && (
-                <div className="space-y-2.5">
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Nama Panggilan</label>
-                      <input
-                        type="text"
-                        value={editingItem.data.panggilan || ''}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, panggilan: e.target.value }
-                          })
-                        }
-                        placeholder="Contoh: Ust. Ridwan"
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Email</label>
-                      <input
-                        type="email"
-                        value={editingItem.data.email || ''}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, email: e.target.value }
-                          })
-                        }
-                        placeholder="guru@sekolah.sch.id"
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Departemen</label>
-                      <input
-                        type="text"
-                        value={editingItem.data.department || ''}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, department: e.target.value }
-                          })
-                        }
-                        placeholder="Diniyyah / Umum"
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Beban Max Jam/Mgg</label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={editingItem.data.maxPeriodsPerWeek || editingItem.data.max_periods_per_week || 18}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: {
-                              ...editingItem.data,
-                              maxPeriodsPerWeek: parseInt(e.target.value) || 18,
-                              max_periods_per_week: parseInt(e.target.value) || 18
-                            }
-                          })
-                        }
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Warna Badge</label>
-                      <div className="flex items-center gap-1.5">
-                        <input
-                          type="color"
-                          value={editingItem.data.color || '#0284C7'}
-                          onChange={(e) =>
-                            setEditingItem({
-                              ...editingItem,
-                              data: { ...editingItem.data, color: e.target.value }
-                            })
-                          }
-                          className="w-8 h-8 rounded border border-slate-200 cursor-pointer p-0.5 bg-slate-50 shrink-0"
-                        />
-                        <input
-                          type="text"
-                          value={editingItem.data.color || '#0284C7'}
-                          onChange={(e) =>
-                            setEditingItem({
-                              ...editingItem,
-                              data: { ...editingItem.data, color: e.target.value }
-                            })
-                          }
-                          className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Specific fields for Students */}
-              {editingItem.type === 'students' && (
-                <div className="space-y-2.5">
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">NISN</label>
-                      <input
-                        type="text"
-                        value={editingItem.data.nisn || ''}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, nisn: e.target.value }
-                          })
-                        }
-                        placeholder="Contoh: 0081234567"
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Jenis Kelamin</label>
-                      <select
-                        value={editingItem.data.gender || 'L'}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, gender: e.target.value }
-                          })
-                        }
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      >
-                        <option value="L">Ikhwan (Laki-laki)</option>
-                        <option value="P">Akhwat (Perempuan)</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">No. Kontak / WhatsApp</label>
-                    <input
-                      type="text"
-                      value={editingItem.data.phone || ''}
-                      onChange={(e) =>
-                        setEditingItem({
-                          ...editingItem,
-                          data: { ...editingItem.data, phone: e.target.value }
-                        })
-                      }
-                      placeholder="Contoh: 081234567890"
-                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">Rombel / Kelas Terdaftar</label>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-2.5 bg-slate-50 border border-slate-200 rounded-lg max-h-36 overflow-y-auto">
-                      {(db.classes || []).map((cls) => {
-                        const currentClassIds: string[] =
-                          editingItem.data.enrolledClassIds ||
-                          studentEnrollmentsMap.get(editingItem.data.id) ||
-                          [];
-                        const isChecked = currentClassIds.includes(cls.id);
-                        return (
-                          <label key={cls.id} className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={isChecked}
-                              onChange={(e) => {
-                                const next = e.target.checked
-                                  ? [...currentClassIds, cls.id]
-                                  : currentClassIds.filter((id) => id !== cls.id);
-                                setEditingItem({
-                                  ...editingItem,
-                                  data: { ...editingItem.data, enrolledClassIds: next }
-                                });
-                              }}
-                              className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
-                            />
-                            <span className="truncate">{cls.name}</span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* 3. Specific fields for Rooms */}
-              {editingItem.type === 'rooms' && (
-                <div className="grid grid-cols-3 gap-2">
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">Gedung</label>
-                    <input
-                      type="text"
-                      value={editingItem.data.building || ''}
-                      onChange={(e) =>
-                        setEditingItem({
-                          ...editingItem,
-                          data: { ...editingItem.data, building: e.target.value }
-                        })
-                      }
-                      placeholder="Gedung Utama"
-                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">Kapasitas</label>
-                    <input
-                      type="number"
-                      min={1}
-                      value={editingItem.data.capacity ?? 30}
-                      onChange={(e) =>
-                        setEditingItem({
-                          ...editingItem,
-                          data: { ...editingItem.data, capacity: parseInt(e.target.value) || 30 }
-                        })
-                      }
-                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">Tipe Ruangan</label>
-                    <select
-                      value={editingItem.data.type || 'Standard'}
-                      onChange={(e) =>
-                        setEditingItem({
-                          ...editingItem,
-                          data: { ...editingItem.data, type: e.target.value }
-                        })
-                      }
-                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                    >
-                      <option value="Standard">Standard</option>
-                      <option value="Laboratorium Komputer">Lab Komputer</option>
-                      <option value="Laboratorium IPA">Lab IPA</option>
-                      <option value="Aula">Aula</option>
-                      <option value="Masjid">Masjid</option>
-                      <option value="Lainnya">Lainnya</option>
-                    </select>
-                  </div>
-                </div>
-              )}
-
-              {/* 4. Specific fields for Subjects */}
-              {editingItem.type === 'subjects' && (
-                <div className="space-y-2.5">
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Departemen / Kategori</label>
-                      <input
-                        type="text"
-                        value={editingItem.data.department || ''}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, department: e.target.value }
-                          })
-                        }
-                        placeholder="Diniyyah / Bahasa / Umum"
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Warna Badge Mapel</label>
-                      <div className="flex items-center gap-1.5">
-                        <input
-                          type="color"
-                          value={editingItem.data.color || '#3B82F6'}
-                          onChange={(e) =>
-                            setEditingItem({
-                              ...editingItem,
-                              data: { ...editingItem.data, color: e.target.value }
-                            })
-                          }
-                          className="w-8 h-8 rounded border border-slate-200 cursor-pointer p-0.5 bg-slate-50 shrink-0"
-                        />
-                        <input
-                          type="text"
-                          value={editingItem.data.color || '#3B82F6'}
-                          onChange={(e) =>
-                            setEditingItem({
-                              ...editingItem,
-                              data: { ...editingItem.data, color: e.target.value }
-                            })
-                          }
-                          className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Guru Default</label>
-                      <select
-                        value={editingItem.data.defaultTeacherId || editingItem.data.default_teacher_id || ''}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: {
-                              ...editingItem.data,
-                              defaultTeacherId: e.target.value || undefined,
-                              default_teacher_id: e.target.value || null
-                            }
-                          })
-                        }
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      >
-                        <option value="">-- Tanpa Guru --</option>
-                        {(db.teachers || []).map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.panggilan || t.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Ruang Default</label>
-                      <select
-                        value={editingItem.data.defaultRoomId || editingItem.data.default_room_id || ''}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: {
-                              ...editingItem.data,
-                              defaultRoomId: e.target.value || undefined,
-                              default_room_id: e.target.value || null
-                            }
-                          })
-                        }
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      >
-                        <option value="">-- Tanpa Ruang --</option>
-                        {(db.rooms || []).map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {r.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Kitab Acuan</label>
-                      <select
-                        value={editingItem.data.defaultBookId || editingItem.data.default_book || ''}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: {
-                              ...editingItem.data,
-                              defaultBookId: e.target.value || null,
-                              default_book: e.target.value || null,
-                              default_book_id: e.target.value || null
-                            }
-                          })
-                        }
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      >
-                        <option value="">-- Tanpa Kitab --</option>
-                        {(db.books || []).map((b) => (
-                          <option key={b.id} value={b.id}>
-                            {b.title}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* 5. Specific fields for Books */}
-              {editingItem.type === 'books' && (
-                <div className="space-y-2.5">
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Judul Arab / Alternatif</label>
-                      <input
-                        type="text"
-                        value={editingItem.data.altTitle || ''}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, altTitle: e.target.value }
-                          })
-                        }
-                        placeholder="Contoh: متن الآجرومية"
-                        dir="auto"
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Pengarang / Muallif</label>
-                      <input
-                        type="text"
-                        value={editingItem.data.author || ''}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, author: e.target.value }
-                          })
-                        }
-                        placeholder="Nama Muallif"
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Penerbit</label>
-                      <input
-                        type="text"
-                        value={editingItem.data.publisher || ''}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, publisher: e.target.value }
-                          })
-                        }
-                        placeholder="Darul Kutub / Toha Putra"
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Edisi</label>
-                      <input
-                        type="text"
-                        value={editingItem.data.edition || ''}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, edition: e.target.value }
-                          })
-                        }
-                        placeholder="Jilid 1 / Cet. 2"
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">
-                        Jumlah Jilid
-                      </label>
-                      <input
-                        type="number"
-                        min={0}
-                        value={
-                          editingItem.data.chapters && editingItem.data.chapters.length > 0
-                            ? editingItem.data.chapters.length
-                            : (editingItem.data.totalChapters ?? 1)
-                        }
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, totalChapters: parseInt(e.target.value) || 0 }
-                          })
-                        }
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">
-                        Jumlah Halaman {editingItem.data.chapters && editingItem.data.chapters.length > 0 ? '(Kumulatif)' : ''}
-                      </label>
-                      <input
-                        type="number"
-                        min={0}
-                        value={
-                          editingItem.data.chapters && editingItem.data.chapters.length > 0
-                            ? editingItem.data.chapters.reduce((sum: number, ch: any) => sum + (Number(ch.pageEnd ?? ch.page_end) || 0), 0)
-                            : (editingItem.data.totalPages ?? 0)
-                        }
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, totalPages: parseInt(e.target.value) || 0 }
-                          })
-                        }
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Mapel Terkait</label>
-                      <select
-                        value={editingItem.data.defaultSubjectId || ''}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, defaultSubjectId: e.target.value || undefined }
-                          })
-                        }
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      >
-                        <option value="">-- Pilih Mapel --</option>
-                        {(db.subjects || []).map((s) => (
-                          <option key={s.id} value={s.id}>
-                            {s.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Pengampu Default</label>
-                      <select
-                        value={editingItem.data.defaultTeacherId || ''}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, defaultTeacherId: e.target.value || undefined }
-                          })
-                        }
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                      >
-                        <option value="">-- Pilih Guru --</option>
-                        {(db.teachers || []).map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.panggilan || t.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-
-                  {/* Volume (Jilid) List Editor */}
-                  <div className="pt-2.5 border-t border-slate-200/80 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <label className="block font-bold text-slate-800 text-xs">
-                          Daftar Jilid (Volume Kitab)
-                        </label>
-                        <p className="text-[10px] text-slate-400">
-                          Kelola rincian jilid fisik, judul jilid, dan batas halaman per jilid.
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const currentVols = editingItem.data.volumes || editingItem.data.chapters || [];
-                          const nextNum = currentVols.length + 1;
-                          const newVol = {
-                            id: `vol-${editingItem.data.id || 'book'}-${nextNum}`,
-                            bookId: editingItem.data.id || '',
-                            volumeNumber: nextNum,
-                            chapterNumber: nextNum,
-                            title: `Jilid ${nextNum}`,
-                            pageStart: 1,
-                            pageEnd: 100,
-                          };
-                          const updated = [...currentVols, newVol];
-                          setEditingItem({
-                            ...editingItem,
-                            data: {
-                              ...editingItem.data,
-                              volumes: updated,
-                              chapters: updated,
-                              totalChapters: updated.length,
-                            },
-                          });
-                        }}
-                        className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg border border-indigo-200 transition-colors cursor-pointer"
-                      >
-                        <Plus className="w-3 h-3" />
-                        <span>Tambah Jilid</span>
-                      </button>
-                    </div>
-
-                    {(() => {
-                      const vols = editingItem.data.volumes || editingItem.data.chapters || [];
-                      if (vols.length === 0) {
-                        return (
-                          <div className="p-3 bg-slate-50 border border-dashed border-slate-200 rounded-lg text-center text-[11px] text-slate-400">
-                            Belum ada rincian jilid. Klik tombol "Tambah Jilid" untuk menambahkan volume buku.
-                          </div>
-                        );
-                      }
-                      return (
-                        <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                          {vols.map((vol: any, idx: number) => (
-                            <div
-                              key={vol.id || idx}
-                              className="flex items-center gap-2 p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                            >
-                              <span className="font-mono text-[10px] font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded shrink-0">
-                                Jilid {vol.volumeNumber ?? vol.chapterNumber ?? (idx + 1)}
-                              </span>
-                              <input
-                                type="text"
-                                value={vol.title || ''}
-                                onChange={(e) => {
-                                  const updated = vols.map((v: any, i: number) =>
-                                    i === idx ? { ...v, title: e.target.value } : v
-                                  );
-                                  setEditingItem({
-                                    ...editingItem,
-                                    data: { ...editingItem.data, volumes: updated, chapters: updated },
-                                  });
-                                }}
-                                placeholder="Nama/Judul Jilid (opsional)"
-                                className="flex-1 p-1 bg-white border border-slate-200 rounded text-xs min-w-0"
-                              />
-                              <div className="flex items-center gap-1 shrink-0">
-                                <span className="text-[10px] text-slate-400">Hal:</span>
-                                <input
-                                  type="number"
-                                  min={1}
-                                  value={vol.pageStart ?? 1}
-                                  onChange={(e) => {
-                                    const val = parseInt(e.target.value) || 1;
-                                    const updated = vols.map((v: any, i: number) =>
-                                      i === idx ? { ...v, pageStart: val } : v
-                                    );
-                                    setEditingItem({
-                                      ...editingItem,
-                                      data: { ...editingItem.data, volumes: updated, chapters: updated },
-                                    });
-                                  }}
-                                  placeholder="Awal"
-                                  className="w-14 p-1 bg-white border border-slate-200 rounded text-xs font-mono text-center"
-                                />
-                                <span className="text-slate-400">-</span>
-                                <input
-                                  type="number"
-                                  min={1}
-                                  value={vol.pageEnd ?? 100}
-                                  onChange={(e) => {
-                                    const val = parseInt(e.target.value) || 100;
-                                    const updated = vols.map((v: any, i: number) =>
-                                      i === idx ? { ...v, pageEnd: val } : v
-                                    );
-                                    setEditingItem({
-                                      ...editingItem,
-                                      data: { ...editingItem.data, volumes: updated, chapters: updated },
-                                    });
-                                  }}
-                                  placeholder="Akhir"
-                                  className="w-14 p-1 bg-white border border-slate-200 rounded text-xs font-mono text-center"
-                                />
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const updated = vols
-                                    .filter((_: any, i: number) => i !== idx)
-                                    .map((v: any, i: number) => ({
-                                      ...v,
-                                      volumeNumber: i + 1,
-                                      chapterNumber: i + 1,
-                                    }));
-                                  setEditingItem({
-                                    ...editingItem,
-                                    data: {
-                                      ...editingItem.data,
-                                      volumes: updated,
-                                      chapters: updated,
-                                      totalChapters: updated.length,
-                                    },
-                                  });
-                                }}
-                                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors cursor-pointer shrink-0"
-                                title="Hapus jilid ini"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                </div>
-              )}
-
-              {/* 6. Specific fields for Sessions */}
-              {editingItem.type === 'sessions' && (
-                <div className="grid grid-cols-3 gap-2">
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">Nomor Urut</label>
-                    <input
-                      type="number"
-                      min={1}
-                      value={editingItem.data.order ?? editingItem.data.sort_order ?? 1}
-                      onChange={(e) =>
-                        setEditingItem({
-                          ...editingItem,
-                          data: {
-                            ...editingItem.data,
-                            order: parseInt(e.target.value) || 1,
-                            sort_order: parseInt(e.target.value) || 1
-                          }
-                        })
-                      }
-                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">Jam Mulai</label>
-                    <input
-                      type="time"
-                      value={editingItem.data.startTime || '07:30'}
-                      onChange={(e) =>
-                        setEditingItem({
-                          ...editingItem,
-                          data: { ...editingItem.data, startTime: e.target.value }
-                        })
-                      }
-                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">Jam Selesai</label>
-                    <input
-                      type="time"
-                      value={editingItem.data.endTime || '09:00'}
-                      onChange={(e) =>
-                        setEditingItem({
-                          ...editingItem,
-                          data: { ...editingItem.data, endTime: e.target.value }
-                        })
-                      }
-                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* 7. Specific fields for Periods */}
-              {editingItem.type === 'periods' && (
-                <div className="space-y-2.5">
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Nomor Periode</label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={editingItem.data.periodNumber ?? editingItem.data.period_number ?? 1}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: {
-                              ...editingItem.data,
-                              periodNumber: parseInt(e.target.value) || 1,
-                              period_number: parseInt(e.target.value) || 1
-                            }
-                          })
-                        }
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Tanggal Mulai</label>
-                      <input
-                        type="date"
-                        value={editingItem.data.startDate || ''}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, startDate: e.target.value }
-                          })
-                        }
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Tanggal Selesai</label>
-                      <input
-                        type="date"
-                        value={editingItem.data.endDate || ''}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, endDate: e.target.value }
-                          })
-                        }
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">Keterangan / Deskripsi</label>
-                    <input
-                      type="text"
-                      value={editingItem.data.description || ''}
-                      onChange={(e) =>
-                        setEditingItem({
-                          ...editingItem,
-                          data: { ...editingItem.data, description: e.target.value }
-                        })
-                      }
-                      placeholder="Contoh: Siklus 1 - Persiapan KBM Awal Tahun"
-                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* 8. Specific fields for Materi Silabus */}
-              {editingItem.type === 'materi' && (
-                <div className="space-y-2.5">
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">Buku Acuan *</label>
-                    <select
-                      value={editingItem.data.bookId || ''}
-                      onChange={(e) =>
-                        setEditingItem({
-                          ...editingItem,
-                          data: { ...editingItem.data, bookId: e.target.value }
-                        })
-                      }
-                      required
-                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                    >
-                      <option value="">-- Pilih Buku Acuan --</option>
-                      {(db.books || []).map((b) => (
-                        <option key={b.id} value={b.id}>
-                          {b.title} [{b.id}]
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">Judul Bab / Pokok Bahasan *</label>
-                    <input
-                      type="text"
-                      value={editingItem.data.title || ''}
-                      onChange={(e) =>
-                        setEditingItem({
-                          ...editingItem,
-                          data: { ...editingItem.data, title: e.target.value }
-                        })
-                      }
-                      required
-                      placeholder="Contoh: Bab 1 - Mukaddimah dan Pembagian Kalam"
-                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-4 gap-2">
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Bab / Urut *</label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={editingItem.data.order ?? 1}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: {
-                              ...editingItem.data,
-                              order: parseInt(e.target.value) || 1,
-                              no: parseInt(e.target.value) || 1
-                            }
-                          })
-                        }
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Jilid / Juz</label>
-                      <input
-                        type="text"
-                        value={editingItem.data.part ?? '1'}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, part: e.target.value }
-                          })
-                        }
-                        placeholder="1"
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Hal Mulai</label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={editingItem.data.page_start ?? ''}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, page_start: parseInt(e.target.value) || 1 }
-                          })
-                        }
-                        placeholder="1"
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">Hal Akhir</label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={editingItem.data.page_end ?? ''}
-                        onChange={(e) =>
-                          setEditingItem({
-                            ...editingItem,
-                            data: { ...editingItem.data, page_end: parseInt(e.target.value) || 1 }
-                          })
-                        }
-                        placeholder="12"
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setEditingItem(null)}
-                  className="px-3 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 cursor-pointer"
-                >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 cursor-pointer shadow-2xs"
-                >
-                  Simpan Perubahan
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* In-App Delete Confirmation Modal */}
+      <DeleteConfirmModal
+        isOpen={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDeleteConfirm}
+        title={`Hapus Data ${ENTITY_TABS.find((t) => t.id === deleteTarget?.type)?.singularName}`}
+        itemName={deleteTarget?.name || deleteTarget?.id || ''}
+        itemId={deleteTarget?.id || ''}
+      />
     </div>
   );
 };

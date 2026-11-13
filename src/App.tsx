@@ -465,6 +465,7 @@ export default function App() {
     // 2. Clear database dirty flag and reload clean state from Turso
     setIsDirty(false);
     setSaveStatus({ kind: 'idle' });
+    window.dispatchEvent(new Event('database:saved'));
 
     fetch('/api/database')
       .then((res) => {
@@ -545,6 +546,7 @@ export default function App() {
         actualCounts = actual;
         savedTimestamp = body.savedAt || savedTimestamp;
         setIsDirty(false);
+        window.dispatchEvent(new Event('database:saved'));
       }
 
       // Also flush pending attendance drafts if any
@@ -959,9 +961,9 @@ export default function App() {
             initialSelectedSubjectId={selectedSubjectId}
             onBackToSchedule={() => handleTabChange('studio')}
             onSelectSubject={(subjectId) => {
-              // Do not force carry-over any classId so user can choose or auto-resolve properly
-              handleNavigateToJournal(subjectId, '', '');
+              handleNavigateToSyllabus(subjectId);
             }}
+            onNavigateToSyllabusScope={handleNavigateToSyllabusScope}
             onSelectBook={(bookId) => {
               handleNavigateToBooks(bookId);
             }}

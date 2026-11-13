@@ -267,12 +267,19 @@ export function normalizeDatabaseState(raw: any): DatabaseState {
       end_date: String(p.endDate || p.end_date || '2026-09-30')
     }));
 
+  const resolveDisplayCode = (item: any, fallback: string = ''): string => {
+    if (item.displayCode !== undefined) return String(item.displayCode);
+    if (item.display_code !== undefined) return String(item.display_code);
+    if (item.code !== undefined) return String(item.code);
+    return fallback;
+  };
+
   const sessions: Session[] = (Array.isArray(raw.sessions) ? raw.sessions : [])
     .slice()
     .sort((a: any, b: any) => Number(a.order ?? a.sort_order ?? 0) - Number(b.order ?? b.sort_order ?? 0))
     .map((s: any, idx: number) => {
       const id = String(s.id || `ses-${idx + 1}`);
-      const displayCode = String(s.displayCode || s.display_code || s.code || id);
+      const displayCode = resolveDisplayCode(s, id);
       return {
         id,
         displayCode,
@@ -289,7 +296,7 @@ export function normalizeDatabaseState(raw: any): DatabaseState {
 
   const subjects: Subject[] = (Array.isArray(raw.subjects) ? raw.subjects : []).map((s: any, idx: number) => {
     const id = String(s.id || `sub-${idx + 1}`);
-    const displayCode = String(s.displayCode || s.display_code || s.code || id);
+    const displayCode = resolveDisplayCode(s, id);
     const defaultBook = s.default_book || s.defaultBookId || s.default_book_code || undefined;
     return {
       id,
@@ -310,7 +317,7 @@ export function normalizeDatabaseState(raw: any): DatabaseState {
 
   const classes: ClassEntity[] = (Array.isArray(raw.classes) ? raw.classes : []).map((c: any, idx: number) => {
     const id = String(c.id || `cls-${idx + 1}`);
-    const displayCode = String(c.displayCode || c.display_code || c.code || id);
+    const displayCode = resolveDisplayCode(c, id);
     return {
       id,
       displayCode,
@@ -331,7 +338,7 @@ export function normalizeDatabaseState(raw: any): DatabaseState {
 
   const teachers: Teacher[] = (Array.isArray(raw.teachers) ? raw.teachers : []).map((t: any, idx: number) => {
     const id = String(t.id || `tch-${idx + 1}`);
-    const displayCode = String(t.displayCode || t.display_code || t.code || t.panggilan || id);
+    const displayCode = resolveDisplayCode(t, t.panggilan || id);
     return {
       id,
       displayCode,
@@ -348,7 +355,7 @@ export function normalizeDatabaseState(raw: any): DatabaseState {
 
   const rooms: Room[] = (Array.isArray(raw.rooms) ? raw.rooms : []).map((r: any, idx: number) => {
     const id = String(r.id || `rm-${idx + 1}`);
-    const displayCode = String(r.displayCode || r.display_code || r.code || id);
+    const displayCode = resolveDisplayCode(r, id);
     return {
       id,
       displayCode,
@@ -446,7 +453,7 @@ export function normalizeDatabaseState(raw: any): DatabaseState {
 
   const books: Book[] = (Array.isArray(raw.books) ? raw.books : []).map((b: any, idx: number) => {
     const id = String(b.id || b.code || `bk-${idx + 1}`);
-    const displayCode = String(b.displayCode || b.display_code || b.altTitle || b.alt_title || b.code || id);
+    const displayCode = resolveDisplayCode(b, b.altTitle || b.alt_title || id);
     const rawSubId = b.defaultSubjectId || b.default_subject_code || '';
     const resolvedSubId = rawSubId && subjectCodeToIdMap.has(String(rawSubId).toLowerCase())
       ? subjectCodeToIdMap.get(String(rawSubId).toLowerCase())!
@@ -579,7 +586,23 @@ export function normalizeDatabaseState(raw: any): DatabaseState {
     materials,
     syllabusUnits,
     syllabusScopes,
-    students: Array.isArray(raw.students) ? raw.students : undefined,
+    students: Array.isArray(raw.students)
+      ? raw.students.map((s: any, idx: number) => {
+          const id = String(s.id || `stu-${idx + 1}`);
+          const displayCode = resolveDisplayCode(s, '');
+          return {
+            ...s,
+            id,
+            displayCode,
+            display_code: displayCode,
+            name: String(s.name || ''),
+            nisn: s.nisn ? String(s.nisn) : undefined,
+            gender: s.gender === 'P' ? 'P' : 'L',
+            phone: s.phone ? String(s.phone) : undefined,
+            email: s.email ? String(s.email) : undefined
+          };
+        })
+      : undefined,
     enrollments: Array.isArray(raw.enrollments) ? raw.enrollments : undefined,
     meetings
   };

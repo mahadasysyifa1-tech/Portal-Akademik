@@ -602,7 +602,7 @@ export const HomeTab: React.FC<HomeTabProps> = ({
         >
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[11px] text-slate-700 font-semibold">
-              Pertemuan #{cClass.occurrence.meetingIndex}
+              {cClass.occurrence.meetingIndex > 0 ? `Pertemuan #${cClass.occurrence.meetingIndex}` : 'Sesi Dibatalkan'}
             </span>
             {renderPacingBadge(cClass.occurrence.subjectId, cClass.occurrence.classId)}
           </div>
@@ -838,7 +838,7 @@ export const HomeTab: React.FC<HomeTabProps> = ({
         <div className="mt-5 pt-3.5 border-t border-slate-100 flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[11px] text-slate-500 font-semibold">
-              Pertemuan #{nClass.occurrence.meetingIndex}
+              {nClass.occurrence.meetingIndex > 0 ? `Pertemuan #${nClass.occurrence.meetingIndex}` : 'Sesi Dibatalkan'}
             </span>
             {renderPacingBadge(nClass.occurrence.subjectId, nClass.occurrence.classId)}
           </div>
@@ -1290,7 +1290,7 @@ export const HomeTab: React.FC<HomeTabProps> = ({
           occurrence.date,
           occurrence.classId,
           occurrence.sessionId,
-          occurrence.id
+          occurrence.id?.startsWith('mtg-') ? occurrence.id : undefined
         );
         const scopedUnits = getScopedUnits(db, occurrence.subjectId, occurrence.classId);
         const titles = units.map((u) => u.title).join(', ');
@@ -1318,89 +1318,26 @@ export const HomeTab: React.FC<HomeTabProps> = ({
             meetingNumber={occurrence.meetingIndex}
             isOpen={true}
             onClose={() => setActiveAttendanceOcc(null)}
-            onSaved={() => setActiveAttendanceOcc(null)}
             initialDraft={store.getRollCallDraft(meetingId)}
-            onSaveDraft={(payload) => {
-              store.setRollCallDraft(meetingId, payload);
-              if (onUpdateDb) {
-                const numHal =
-                  payload.materialProgress?.hal !== undefined &&
-                  payload.materialProgress.hal !== '' &&
-                  !isNaN(Number(payload.materialProgress.hal))
-                    ? Number(payload.materialProgress.hal)
-                    : undefined;
-                const numStartHal =
-                  payload.materialProgress?.startHal !== undefined &&
-                  payload.materialProgress.startHal !== '' &&
-                  !isNaN(Number(payload.materialProgress.startHal))
-                    ? Number(payload.materialProgress.startHal)
-                    : undefined;
-                const unitId = payload.materialProgress?.unitId;
-                const startUnitId = payload.materialProgress?.startUnitId;
-                const draftMateri = payload.materialProgress?.materi;
-                const draftStartMateri = payload.materialProgress?.startMateri;
-
-                onUpdateDb((prev) => {
-                  const meetings = prev.meetings || [];
-                  const idx = meetings.findIndex((m) => m.id === meetingId);
-                  const updated =
-                    idx !== -1
-                      ? meetings.map((m, i) =>
-                          i === idx
-                            ? {
-                                ...m,
-                                actual_materi_id: unitId || draftMateri,
-                                actual_page: numHal,
-                                actual_start_materi_id: startUnitId || draftStartMateri,
-                                actual_start_page: numStartHal,
-                                notes: payload.meetingNotes,
-                              }
-                            : m
-                        )
-                      : [
-                          ...meetings,
-                          {
-                            id: meetingId,
-                            meeting_date: occurrence.date,
-                            meeting_index: occurrence.meetingIndex,
-                            class_id: occurrence.classId,
-                            subject_id: occurrence.subjectId,
-                            teacher_id: occurrence.teacherId,
-                            room_id: occurrence.roomId,
-                            session_id: occurrence.sessionId,
-                            status: 'scheduled',
-                            actual_materi_id: unitId || draftMateri,
-                            actual_page: numHal,
-                            actual_start_materi_id: startUnitId || draftStartMateri,
-                            actual_start_page: numStartHal,
-                            notes: payload.meetingNotes,
-                          } as any,
-                        ];
-                  return { ...prev, meetings: updated };
-                });
-              }
+            onSaveDraft={(payload, options) => {
+              const isSessionCancelled =
+                options?.preserveCancelled ??
+                store.getEffectiveStatus(meetingId, occurrence.status) === 'cancelled';
+              store.setRollCallDraft(meetingId, payload, { preserveCancelled: isSessionCancelled });
+              store.syncMeetingDraftToDb(onUpdateDb, meetingId, payload, {
+                meeting_date: occurrence.date,
+                meeting_index: occurrence.meetingIndex,
+                class_id: occurrence.classId,
+                subject_id: occurrence.subjectId,
+                teacher_id: occurrence.teacherId,
+                room_id: occurrence.roomId,
+                session_id: occurrence.sessionId,
+                status: isSessionCancelled ? 'cancelled' : (occurrence.status || 'scheduled'),
+              });
             }}
             onDiscardDraft={() => {
               store.discardDraft(meetingId);
-              if (onUpdateDb) {
-                onUpdateDb((prev) => {
-                  const meetings = prev.meetings || [];
-                  return {
-                    ...prev,
-                    meetings: meetings.map((m) =>
-                      m.id === meetingId
-                        ? {
-                            ...m,
-                            actual_materi_id: (occurrence as any)?.actual_materi_id ?? (occurrence as any)?.actualMateriId,
-                            actual_page: (occurrence as any)?.actual_page ?? (occurrence as any)?.actualPage,
-                            actual_start_materi_id: (occurrence as any)?.actual_start_materi_id ?? (occurrence as any)?.actualStartMateriId,
-                            actual_start_page: (occurrence as any)?.actual_start_page ?? (occurrence as any)?.actualStartPage,
-                          }
-                        : m
-                    ),
-                  };
-                });
-              }
+              store.restoreMeetingDraftInDb(onUpdateDb, meetingId);
             }}
             getEffectiveStatus={store.getEffectiveStatus}
             hasDraft={store.isMeetingDrafted(meetingId)}

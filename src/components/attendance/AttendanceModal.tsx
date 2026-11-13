@@ -8,15 +8,18 @@ import {
   Ban,
   ChevronUp,
   ChevronDown,
-  ChevronsUp,
-  ChevronsDown,
+  ChevronLeft,
+  ChevronRight,
   SkipBack,
   SkipForward,
   Search,
   BookOpen,
   LogIn,
   LogOut,
-  Pencil
+  Pencil,
+  StickyNote,
+  CalendarClock,
+  CheckCircle2
 } from 'lucide-react';
 import type {
   AttendanceStatus,
@@ -33,7 +36,6 @@ export interface AttendanceModalProps {
   hasDraft: boolean;
   isAdmin?: boolean;
   onClose: () => void;
-  onSaved?: () => void;
   targetMateri?: string;
   targetHal?: number | string;
   targetUnitId?: string;
@@ -48,7 +50,7 @@ export interface AttendanceModalProps {
     page_end?: number | string;
   }>;
   initialDraft?: PendingRollCallLog;
-  onSaveDraft?: (draftPayload: any) => void;
+  onSaveDraft?: (draftPayload: any, options?: { preserveCancelled?: boolean }) => void;
   onDiscardDraft?: (meetingId: string) => void;
   getEffectiveStatus?: (meetingId: string, dbStatus: string) => string;
   onSetSessionStatus?: (meetingId: string, status: 'scheduled' | 'cancelled') => void;
@@ -119,12 +121,20 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     startTime: string;
     endTime: string;
   } | null>(null);
+  const noteInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Time-capture mode ('nowTime' = live current clock, 'default' = session default start time)
+  const [timeStampMode, setTimeStampMode] = useState<'nowTime' | 'default'>('nowTime');
+  const [liveNowTime, setLiveNowTime] = useState<string>(() => {
+    const d = new Date();
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+  });
 
   // Temporary session default times for bulk/individual defaulting in this session
   const [sessionDefaultTimes, setSessionDefaultTimes] = useState<{ start: string; end: string } | null>(null);
 
-  // Visual flash feedback on auto-stamping
-  const [flashingRowId, setFlashingRowId] = useState<string | null>(null);
+  // Visual flash feedback on auto-stamping (supports multiple rows simultaneously)
+  const [flashingRowIds, setFlashingRowIds] = useState<Set<string>>(() => new Set());
   const flashTimerRef = useRef<any>(null);
 
   // Visual flash feedback when material changes via page stepper
@@ -182,12 +192,26 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
       s.startHal !== '' && s.startHal !== undefined && !isNaN(Number(s.startHal)) ? Number(s.startHal) : '',
     ]);
 
-  const triggerFlash = (id: string) => {
+  const triggerFlash = (ids: string | string[]) => {
+    const list = Array.isArray(ids) ? ids : [ids];
+    if (list.length === 0) return;
     if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-    setFlashingRowId(id);
+    setFlashingRowIds(new Set(list));
     flashTimerRef.current = setTimeout(() => {
-      setFlashingRowId(null);
+      setFlashingRowIds(new Set());
     }, 800);
+  };
+
+  const resolveUnitByIdOrTitle = (val?: string | null) => {
+    if (!val || availableUnits.length === 0) return undefined;
+    const trimmed = String(val).trim();
+    if (!trimmed) return undefined;
+    const lower = trimmed.toLowerCase();
+    return (
+      availableUnits.find((u) => u.id === trimmed) ||
+      availableUnits.find((u) => u.id.toLowerCase() === lower) ||
+      availableUnits.find((u) => u.title.trim().toLowerCase() === lower)
+    );
   };
 
   const buildDraftPayload = () => ({
@@ -216,21 +240,24 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     },
   });
 
+  const latestSerializedRef = useRef<string>('');
+  latestSerializedRef.current = serializeState({
+    teacherStatus,
+    teacherTime,
+    teacherTimeEnd,
+    teacherNote,
+    students,
+    meetingNotes,
+    materi,
+    hal,
+    startMateri,
+    startHal,
+  });
+
   // Live auto-save draft whenever values diverge from baseline (only for admin)
   useEffect(() => {
     if (!isOpen || !meetingId || loading || baselineRef.current === null || !isAdmin) return;
-    const current = serializeState({
-      teacherStatus,
-      teacherTime,
-      teacherTimeEnd,
-      teacherNote,
-      students,
-      meetingNotes,
-      materi,
-      hal,
-      startMateri,
-      startHal,
-    });
+    const current = latestSerializedRef.current;
 
     if (current === baselineRef.current) {
       if (lastDraftRef.current && lastDraftRef.current.id === meetingId) {
@@ -240,7 +267,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     } else {
       if (!lastDraftRef.current || lastDraftRef.current.id !== meetingId || lastDraftRef.current.json !== current) {
         lastDraftRef.current = { id: meetingId, json: current };
-        onSaveDraft?.(buildDraftPayload());
+        onSaveDraft?.(buildDraftPayload(), { preserveCancelled: isCancelled });
       }
     }
   }, [
@@ -257,7 +284,8 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     isOpen,
     meetingId,
     loading,
-    isAdmin
+    isAdmin,
+    isCancelled
   ]);
 
   // Load meeting data
@@ -270,6 +298,8 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     draftAppliedFor.current = null;
     baselineRef.current = null;
     setSessionDefaultTimes(null);
+    setTimeStampMode('nowTime');
+    setActiveTimePopover(null);
 
     const cached = getCachedRollCall(meetingId);
     if (cached) {
@@ -298,6 +328,20 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
       isMounted = false;
     };
   }, [meetingId, isOpen]);
+
+  // Live ticking clock when modal is open in 'nowTime' mode
+  useEffect(() => {
+    if (!isOpen || timeStampMode !== 'nowTime') return;
+    const syncClock = () => {
+      const d = new Date();
+      setLiveNowTime(
+        `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+      );
+    };
+    syncClock();
+    const timer = setInterval(syncClock, 1000);
+    return () => clearInterval(timer);
+  }, [isOpen, timeStampMode]);
 
   const applyData = (rollCallData: AttendanceRollCallData) => {
     setData(rollCallData);
@@ -393,33 +437,15 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
       initStartHal = legacyStartHal;
     }
 
-    // Normalize: if initMateri was stored as a title or code (legacy), map to unit ID in availableUnits
-    if (initMateri && availableUnits.length > 0) {
-      const initMateriLower = String(initMateri).trim().toLowerCase();
-      const foundUnit = availableUnits.find(
-        (u) =>
-          u.id.toLowerCase() === initMateriLower ||
-          u.title.trim().toLowerCase() === initMateriLower ||
-          u.title.trim().toLowerCase().includes(initMateriLower) ||
-          initMateriLower.includes(u.title.trim().toLowerCase())
-      );
-      if (foundUnit) {
-        initMateri = foundUnit.id;
-      }
+    // Normalize legacy title values strictly to unit ID (no loose substring collisions)
+    const normalizedEndUnit = resolveUnitByIdOrTitle(initMateri);
+    if (normalizedEndUnit) {
+      initMateri = normalizedEndUnit.id;
     }
 
-    if (initStartMateri && availableUnits.length > 0) {
-      const initStartMateriLower = String(initStartMateri).trim().toLowerCase();
-      const foundStartUnit = availableUnits.find(
-        (u) =>
-          u.id.toLowerCase() === initStartMateriLower ||
-          u.title.trim().toLowerCase() === initStartMateriLower ||
-          u.title.trim().toLowerCase().includes(initStartMateriLower) ||
-          initStartMateriLower.includes(u.title.trim().toLowerCase())
-      );
-      if (foundStartUnit) {
-        initStartMateri = foundStartUnit.id;
-      }
+    const normalizedStartUnit = resolveUnitByIdOrTitle(initStartMateri);
+    if (normalizedStartUnit) {
+      initStartMateri = normalizedStartUnit.id;
     }
 
     const initStudents: AttendanceRollCallStudent[] = (rollCallData.students || []).map((s) => ({
@@ -469,66 +495,110 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     lastDraftRef.current = null;
   };
 
-  // Re-apply draft overrides when ready
+  // Re-apply draft overrides when ready (and prevent duplicate onSaveDraft round-trip on mount)
   useEffect(() => {
     if (loading || !initialDraft) return;
     if (draftAppliedFor.current === meetingId) return;
     draftAppliedFor.current = meetingId;
 
+    const base = baselineSnapshotRef.current;
+
+    let nextTeacherStatus = base?.teacherStatus ?? null;
+    let nextTeacherTime = base?.teacherTime ?? '';
+    let nextTeacherTimeEnd = base?.teacherTimeEnd ?? '';
+    let nextTeacherNote = base?.teacherNote ?? '';
+
     if (initialDraft.teacherLog) {
-      if (initialDraft.teacherLog.status !== undefined) setTeacherStatus(initialDraft.teacherLog.status);
-      if (initialDraft.teacherLog.timestampStart !== undefined) setTeacherTime(initialDraft.teacherLog.timestampStart || '');
-      if (initialDraft.teacherLog.timestampEnd !== undefined) setTeacherTimeEnd(initialDraft.teacherLog.timestampEnd || '');
-      if (initialDraft.teacherLog.note !== undefined) setTeacherNote(initialDraft.teacherLog.note || '');
+      if (initialDraft.teacherLog.status !== undefined) {
+        nextTeacherStatus = initialDraft.teacherLog.status;
+        setTeacherStatus(nextTeacherStatus);
+      }
+      if (initialDraft.teacherLog.timestampStart !== undefined) {
+        nextTeacherTime = initialDraft.teacherLog.timestampStart || '';
+        setTeacherTime(nextTeacherTime);
+      }
+      if (initialDraft.teacherLog.timestampEnd !== undefined) {
+        nextTeacherTimeEnd = initialDraft.teacherLog.timestampEnd || '';
+        setTeacherTimeEnd(nextTeacherTimeEnd);
+      }
+      if (initialDraft.teacherLog.note !== undefined) {
+        nextTeacherNote = initialDraft.teacherLog.note || '';
+        setTeacherNote(nextTeacherNote);
+      }
     }
+
+    let nextStudents = base?.students ? base.students.map((s) => ({ ...s })) : students;
     if (initialDraft.studentLogs) {
       const byId = new Map(initialDraft.studentLogs.map((l: any) => [l.studentId, l]));
-      setStudents((prev) =>
-        prev.map((s) => {
-          const d: any = byId.get(s.studentId);
-          if (!d) return s;
-          return {
-            ...s,
-            status: d.status,
-            timestampStart: d.timestampStart ?? s.timestampStart,
-            timestampEnd: d.timestampEnd ?? s.timestampEnd,
-            note: d.note ?? s.note,
-          };
-        })
-      );
+      nextStudents = nextStudents.map((s) => {
+        const d: any = byId.get(s.studentId);
+        if (!d) return s;
+        return {
+          ...s,
+          status: d.status,
+          timestampStart: d.timestampStart ?? s.timestampStart,
+          timestampEnd: d.timestampEnd ?? s.timestampEnd,
+          note: d.note ?? s.note,
+        };
+      });
+      setStudents(nextStudents);
     }
-    if (initialDraft.meetingNotes !== undefined) setMeetingNotes(initialDraft.meetingNotes);
+
+    let nextMeetingNotes = base?.meetingNotes ?? '';
+    if (initialDraft.meetingNotes !== undefined) {
+      nextMeetingNotes = initialDraft.meetingNotes;
+      setMeetingNotes(nextMeetingNotes);
+    }
+
+    let nextMateri = base?.materi ?? '';
+    let nextHal: string | number = base?.hal ?? '';
+    let nextStartMateri = base?.startMateri ?? '';
+    let nextStartHal: string | number = base?.startHal ?? '';
+
     if (initialDraft.materialProgress) {
       const mp = initialDraft.materialProgress;
-      const draftMateri = mp.unitId || mp.materi;
-      if (draftMateri !== undefined) {
-        const found = availableUnits.find((u) => u.title === draftMateri || u.id === draftMateri);
-        setMateri(found ? found.id : draftMateri);
-      }
-      if (mp.hal !== undefined) setHal(mp.hal);
+      const draftMateri = mp.unitId || mp.materi || '';
+      const foundEnd = draftMateri ? resolveUnitByIdOrTitle(draftMateri) : undefined;
+      nextMateri = foundEnd ? foundEnd.id : draftMateri;
+      nextHal = mp.hal !== undefined && mp.hal !== null ? mp.hal : '';
 
-      const draftStartMateri = mp.startUnitId || mp.startMateri;
-      if (draftStartMateri !== undefined) {
-        const foundStart = availableUnits.find((u) => u.title === draftStartMateri || u.id === draftStartMateri);
-        setStartMateri(foundStart ? foundStart.id : draftStartMateri);
-      }
-      if (mp.startHal !== undefined) setStartHal(mp.startHal);
+      const draftStartMateri = mp.startUnitId || mp.startMateri || '';
+      const foundStart = draftStartMateri ? resolveUnitByIdOrTitle(draftStartMateri) : undefined;
+      nextStartMateri = foundStart ? foundStart.id : draftStartMateri;
+      nextStartHal = mp.startHal !== undefined && mp.startHal !== null ? mp.startHal : '';
+
+      setMateri(nextMateri);
+      setHal(nextHal);
+      setStartMateri(nextStartMateri);
+      setStartHal(nextStartHal);
     }
-  }, [loading, initialDraft, meetingId]);
 
-  {/* Refresh the modal upon saving */}
+    lastDraftRef.current = {
+      id: meetingId,
+      json: serializeState({
+        teacherStatus: nextTeacherStatus,
+        teacherTime: nextTeacherTime,
+        teacherTimeEnd: nextTeacherTimeEnd,
+        teacherNote: nextTeacherNote,
+        students: nextStudents,
+        meetingNotes: nextMeetingNotes,
+        materi: nextMateri,
+        hal: nextHal,
+        startMateri: nextStartMateri,
+        startHal: nextStartHal,
+      }),
+    };
+  }, [loading, initialDraft, meetingId, availableUnits]);
+
+  // Refresh the modal upon global save (hasDraft transitions true -> false)
   const prevDraftRef = useRef({ id: meetingId, has: hasDraft });
   useEffect(() => {
     const prev = prevDraftRef.current;
     prevDraftRef.current = { id: meetingId, has: hasDraft };
-    if (prev.id !== meetingId || !prev.has || hasDraft) return; // only true → false, same meeting
+    if (prev.id !== meetingId || !prev.has || hasDraft) return; // only true -> false, same meeting
     if (!isOpen || loading || baselineRef.current === null) return;
 
-    const current = serializeState({
-      teacherStatus, teacherTime, teacherTimeEnd, teacherNote,
-      students, meetingNotes, materi, hal, startMateri, startHal,
-    });
-    if (current === baselineRef.current) return; // our own discard or revert, nothing to do
+    if (latestSerializedRef.current === baselineRef.current) return; // our own discard or revert, nothing to do
 
     fetch(`/api/attendance/meetings/${meetingId}/logs`)
       .then((res) => {
@@ -540,7 +610,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
         setSessionDefaultTimes(null);
       })
       .catch(() => {});
-  }, [hasDraft]);
+  }, [hasDraft, meetingId, isOpen, loading]);
 
   if (!isOpen) return null;
 
@@ -557,17 +627,10 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     end: sessionDefaultTimes?.end || data?.meeting?.endTime || '08:30',
   });
 
-  // Start after or equal to end is rejected, and missing end time automatically falls back to schedule default end.
-  // Both values fall back to defaults whenever invalid.
-  const resolveTimes = (start: string, end: string) => {
-    const defaults = getDefaultTimes();
-    const effectiveStart = start || defaults.start;
-    const effectiveEnd = end || defaults.end;
-    if (effectiveStart >= effectiveEnd) return defaults;
-    return { start: effectiveStart, end: effectiveEnd };
-  };
+  const getActiveCheckInTime = () =>
+    timeStampMode === 'nowTime' ? getNowFormattedTime() : getDefaultTimes().start;
 
-  // Shared toggle helper so individual and batch toggle behave identically
+  // Shared toggle helper: records startTime only (no endTime until End Session) and preserves existing startTime
   const toggleStudentAttendance = (
     student: AttendanceRollCallStudent,
     optValue: AttendanceStatus,
@@ -585,12 +648,8 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     }
 
     if (nextStatus === 'Hadir' || nextStatus === 'Terlambat') {
-      const nowTime = getNowFormattedTime();
-      const defaults = getDefaultTimes();
-      // Ensure end time is ALWAYS recorded and respects invalid time rules
-      const r = resolveTimes(student.timestampStart || nowTime, student.timestampEnd || defaults.end);
-      if (!student.timestampStart) triggerFlash(student.studentId);
-      return { ...student, status: nextStatus, timestampStart: r.start, timestampEnd: r.end };
+      const nextStart = student.timestampStart || getActiveCheckInTime();
+      return { ...student, status: nextStatus, timestampStart: nextStart };
     }
 
     return { ...student, status: nextStatus };
@@ -598,8 +657,6 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
 
   const handleToggleStatus = (target: 'teacher' | string, optValue: AttendanceStatus) => {
     if (!isAdmin) return;
-    const nowTime = getNowFormattedTime();
-    const defaults = getDefaultTimes();
 
     if (target === 'teacher') {
       const nextStatus = teacherStatus === optValue ? null : optValue;
@@ -609,52 +666,87 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
         setTeacherTime('');
         setTeacherTimeEnd('');
       } else if (nextStatus === 'Hadir' || nextStatus === 'Terlambat') {
-        const r = resolveTimes(teacherTime || nowTime, teacherTimeEnd || defaults.end);
-        setTeacherTime(r.start);
-        setTeacherTimeEnd(r.end);
-        if (!teacherTime) triggerFlash('teacher');
+        if (!teacherTime) {
+          setTeacherTime(getActiveCheckInTime());
+          triggerFlash('teacher');
+        }
       }
     } else {
+      const currentStudent = students.find((s) => s.studentId === target);
+      const nextStatus = currentStudent?.status === optValue ? null : optValue;
+      const shouldFlash =
+        Boolean(currentStudent) &&
+        !currentStudent?.timestampStart &&
+        (nextStatus === 'Hadir' || nextStatus === 'Terlambat');
+
       setStudents((prev) =>
         prev.map((s) => (s.studentId === target ? toggleStudentAttendance(s, optValue) : s))
       );
+      if (shouldFlash) triggerFlash(target);
     }
   };
 
   const markAllStudents = (status: AttendanceStatus) => {
     if (!isAdmin) return;
-    const defaults = getDefaultTimes();
-    const allAlreadyThisStatus = students.length > 0 && students.every((s) => s.status === status);
-    const anyTimeDiffers =
-      sessionDefaultTimes &&
-      students.some(
-        (s) => s.timestampStart !== defaults.start || s.timestampEnd !== defaults.end
-      );
+    const checkInTime = getActiveCheckInTime();
+    const allAlreadyMarkedAndTimed =
+      students.length > 0 &&
+      students.every((s) => s.status === status && Boolean(s.timestampStart));
 
-    // If all students are already this status and their times match the session default, toggle off (reset).
-    // If times differ (e.g. session default was updated), re-apply to update all their times.
-    const targetStatus = allAlreadyThisStatus && !anyTimeDiffers ? null : status;
+    // Only toggle off if every student already has this status AND a recorded startTime.
+    // Otherwise fill status & blank startTimes only, leaving existing startTime/endTime intact.
+    const targetStatus = allAlreadyMarkedAndTimed ? null : status;
+    const idsToFlash =
+      targetStatus === null
+        ? []
+        : students.filter((s) => !s.timestampStart).map((s) => s.studentId);
 
     setStudents((prev) =>
       prev.map((s) => {
         if (targetStatus === null) {
           return { ...s, status: null, timestampStart: '', timestampEnd: '' };
         }
-        const nowTime = getNowFormattedTime();
-        const startToUse = sessionDefaultTimes ? defaults.start : s.timestampStart || nowTime;
-        const endToUse = sessionDefaultTimes ? defaults.end : s.timestampEnd || defaults.end;
-        const r = resolveTimes(startToUse, endToUse);
-        if (!s.timestampStart) triggerFlash(s.studentId);
         return {
           ...s,
           status: targetStatus,
-          timestampStart: r.start,
-          timestampEnd: r.end,
+          timestampStart: s.timestampStart || checkInTime,
         };
       })
     );
+
+    if (idsToFlash.length > 0) {
+      triggerFlash(idsToFlash);
+    }
   };
 
+  const handleEndSession = () => {
+    if (!isAdmin) return;
+    const nowTime = getNowFormattedTime();
+    const flashedIds: string[] = [];
+
+    if (teacherTime) {
+      setTeacherTimeEnd(nowTime);
+      flashedIds.push('teacher');
+    }
+
+    students.forEach((s) => {
+      if (s.timestampStart) {
+        flashedIds.push(s.studentId);
+      }
+    });
+
+    setStudents((prev) =>
+      prev.map((s) => (s.timestampStart ? { ...s, timestampEnd: nowTime } : s))
+    );
+
+    if (flashedIds.length > 0) {
+      triggerFlash(flashedIds);
+    }
+
+    if (!meetingNotes.trim()) {
+      setTimeout(() => noteInputRef.current?.focus(), 50);
+    }
+  };
 
   const handleDiscardDraft = () => {
     const base = baselineSnapshotRef.current;
@@ -671,6 +763,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
       setHal(base.hal);
     }
     setSessionDefaultTimes(null);
+    setTimeStampMode('nowTime');
     lastDraftRef.current = null;
     onDiscardDraft?.(meetingId);
   };
@@ -746,25 +839,84 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     return `${prefix}${u.title}`;
   };
 
-  // --- START MATERIAL & PAGE HELPERS ---
-  const matchedStartUnit = startMateri
-    ? availableUnits.find((u) => u.title === startMateri || u.id === startMateri)
-    : undefined;
-
-  const [startRangeMin, startRangeMax] = React.useMemo(() => {
-    if (!matchedStartUnit) return [undefined, undefined];
-    const rawStart = matchedStartUnit.page_start ?? (matchedStartUnit as any).pageStart;
-    const rawEnd = matchedStartUnit.page_end ?? (matchedStartUnit as any).pageEnd;
+  const getUnitRange = (unit: any): [number | undefined, number | undefined] => {
+    if (!unit) return [undefined, undefined];
+    const rawStart = unit.page_start ?? unit.pageStart;
+    const rawEnd = unit.page_end ?? unit.pageEnd;
     const pStart = rawStart !== undefined && rawStart !== '' ? parseInt(String(rawStart), 10) : undefined;
     const pEnd = rawEnd !== undefined && rawEnd !== '' ? parseInt(String(rawEnd), 10) : undefined;
     const validStart = pStart !== undefined && !isNaN(pStart) ? pStart : undefined;
     const validEnd = pEnd !== undefined && !isNaN(pEnd) ? pEnd : undefined;
-
     if (validStart !== undefined && validEnd !== undefined) {
       return [Math.min(validStart, validEnd), Math.max(validStart, validEnd)];
     }
     return [validStart, validEnd];
-  }, [matchedStartUnit]);
+  };
+
+  // Enforce Start <= End across material + page; last edited side wins & updates the opposing side to a valid value
+  const reconcileMaterialOrder = (
+    editedSide: 'start' | 'end',
+    nextStartMat: string,
+    nextStartPage: string | number,
+    nextEndMat: string,
+    nextEndPage: string | number
+  ) => {
+    const startU = resolveUnitByIdOrTitle(nextStartMat);
+    const endU = resolveUnitByIdOrTitle(nextEndMat);
+    const startIdx = startU ? availableUnits.findIndex((u) => u.id === startU.id) : -1;
+    const endIdx = endU ? availableUnits.findIndex((u) => u.id === endU.id) : -1;
+
+    const sNum = nextStartPage !== '' && nextStartPage !== undefined ? parseInt(String(nextStartPage), 10) : NaN;
+    const eNum = nextEndPage !== '' && nextEndPage !== undefined ? parseInt(String(nextEndPage), 10) : NaN;
+    const hasSNum = !isNaN(sNum);
+    const hasENum = !isNaN(eNum);
+
+    let isInvalid = false;
+    if (startIdx !== -1 && endIdx !== -1) {
+      if (startIdx > endIdx) {
+        isInvalid = true;
+      } else if (startIdx === endIdx && hasSNum && hasENum && sNum > eNum) {
+        isInvalid = true;
+      }
+    } else if (hasSNum && hasENum && sNum > eNum) {
+      isInvalid = true;
+    }
+
+    if (isInvalid) {
+      if (editedSide === 'start') {
+        nextEndMat = nextStartMat;
+        if (hasSNum) {
+          nextEndPage = sNum;
+        } else if (startU) {
+          const [uMin] = getUnitRange(startU);
+          nextEndPage = uMin ?? '';
+        }
+        triggerMaterialFlash('end');
+      } else {
+        nextStartMat = nextEndMat;
+        if (hasENum) {
+          nextStartPage = eNum;
+        } else if (endU) {
+          const [uMin] = getUnitRange(endU);
+          nextStartPage = uMin ?? '';
+        }
+        triggerMaterialFlash('start');
+      }
+    }
+
+    setStartMateri(nextStartMat);
+    setStartHal(nextStartPage);
+    setMateri(nextEndMat);
+    setHal(nextEndPage);
+  };
+
+  // --- START MATERIAL & PAGE HELPERS ---
+  const matchedStartUnit = resolveUnitByIdOrTitle(startMateri);
+
+  const [startRangeMin, startRangeMax] = React.useMemo(
+    () => getUnitRange(matchedStartUnit),
+    [matchedStartUnit]
+  );
 
   const startUnitIndex = matchedStartUnit ? availableUnits.findIndex((u) => u.id === matchedStartUnit.id) : -1;
   const canStepToNextStartUnit = startUnitIndex !== -1 && startUnitIndex < availableUnits.length - 1;
@@ -817,11 +969,13 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
       setStartHal('');
       return;
     }
+    let clamped = num;
     if (startRangeMin !== undefined && num < startRangeMin) {
-      setStartHal(startRangeMin);
+      clamped = startRangeMin;
     } else if (startRangeMax !== undefined && num > startRangeMax) {
-      setStartHal(startRangeMax);
+      clamped = startRangeMax;
     }
+    reconcileMaterialOrder('start', startMateri, clamped, materi, hal);
   };
 
   const handleStartPageUp = () => {
@@ -829,29 +983,31 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     const currentNum = parseInt(String(startHal), 10);
     if (isNaN(currentNum)) {
       const target = startRangeMin !== undefined ? startRangeMin : 1;
-      setStartHal(target);
-      if (!startMateri && availableUnits.length > 0) {
+      let nextMat = startMateri;
+      if (!nextMat && availableUnits.length > 0) {
         const uMatch = findUnitForPageWithPartPriority(target);
-        if (uMatch) setStartMateri(uMatch.id);
+        if (uMatch) nextMat = uMatch.id;
       }
+      reconcileMaterialOrder('start', nextMat, target, materi, hal);
       return;
     }
     if (isAtStartRangeMax) {
       if (canStepToNextStartUnit) {
         const nextUnit = availableUnits[startUnitIndex + 1];
-        setStartMateri(nextUnit.id);
         const nextStart = nextUnit.page_start ?? (nextUnit as any).pageStart;
-        setStartHal(nextStart !== undefined ? Number(nextStart) : 1);
+        const nextPage = nextStart !== undefined ? Number(nextStart) : 1;
         triggerMaterialFlash('start');
+        reconcileMaterialOrder('start', nextUnit.id, nextPage, materi, hal);
       }
       return;
     }
     const nextNum = currentNum + 1;
-    setStartHal(nextNum);
-    if (!startMateri && availableUnits.length > 0) {
+    let nextMat = startMateri;
+    if (!nextMat && availableUnits.length > 0) {
       const uMatch = findUnitForPageWithPartPriority(nextNum);
-      if (uMatch) setStartMateri(uMatch.id);
+      if (uMatch) nextMat = uMatch.id;
     }
+    reconcileMaterialOrder('start', nextMat, nextNum, materi, hal);
   };
 
   const handleStartPageDown = () => {
@@ -859,53 +1015,43 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     const currentNum = parseInt(String(startHal), 10);
     if (isNaN(currentNum)) {
       const target = startRangeMin !== undefined ? startRangeMin : 1;
-      setStartHal(target);
-      if (!startMateri && availableUnits.length > 0) {
+      let nextMat = startMateri;
+      if (!nextMat && availableUnits.length > 0) {
         const uMatch = findUnitForPageWithPartPriority(target);
-        if (uMatch) setStartMateri(uMatch.id);
+        if (uMatch) nextMat = uMatch.id;
       }
+      reconcileMaterialOrder('start', nextMat, target, materi, hal);
       return;
     }
     if (isAtStartRangeMin) {
       if (canStepToPrevStartUnit) {
         const prevUnit = availableUnits[startUnitIndex - 1];
-        setStartMateri(prevUnit.id);
         const prevEnd = prevUnit.page_end ?? (prevUnit as any).pageEnd ?? prevUnit.page_start ?? (prevUnit as any).pageStart;
-        setStartHal(prevEnd !== undefined ? Number(prevEnd) : 1);
+        const prevPage = prevEnd !== undefined ? Number(prevEnd) : 1;
         triggerMaterialFlash('start');
+        reconcileMaterialOrder('start', prevUnit.id, prevPage, materi, hal);
       }
       return;
     }
     const nextNum = currentNum - 1;
-    setStartHal(nextNum);
-    if (!startMateri && availableUnits.length > 0) {
+    let nextMat = startMateri;
+    if (!nextMat && availableUnits.length > 0) {
       const uMatch = findUnitForPageWithPartPriority(nextNum);
-      if (uMatch) setStartMateri(uMatch.id);
+      if (uMatch) nextMat = uMatch.id;
     }
+    reconcileMaterialOrder('start', nextMat, nextNum, materi, hal);
   };
 
-  const isStartMateriDraft = startMateri !== (baselineSnapshotRef.current?.startMateri || '');
-  const isStartHalDraft = String(startHal) !== String(baselineSnapshotRef.current?.startHal || '');
+  const isStartMateriDraft = (startMateri ?? '') !== (baselineSnapshotRef.current?.startMateri ?? '');
+  const isStartHalDraft = String(startHal ?? '') !== String(baselineSnapshotRef.current?.startHal ?? '');
 
   // --- END MATERIAL & PAGE HELPERS ---
-  const matchedUnit = materi
-    ? availableUnits.find((u) => u.title === materi || u.id === materi)
-    : undefined;
+  const matchedUnit = resolveUnitByIdOrTitle(materi);
 
-  const [rangeMin, rangeMax] = React.useMemo(() => {
-    if (!matchedUnit) return [undefined, undefined];
-    const rawStart = matchedUnit.page_start ?? (matchedUnit as any).pageStart;
-    const rawEnd = matchedUnit.page_end ?? (matchedUnit as any).pageEnd;
-    const pStart = rawStart !== undefined && rawStart !== '' ? parseInt(String(rawStart), 10) : undefined;
-    const pEnd = rawEnd !== undefined && rawEnd !== '' ? parseInt(String(rawEnd), 10) : undefined;
-    const validStart = pStart !== undefined && !isNaN(pStart) ? pStart : undefined;
-    const validEnd = pEnd !== undefined && !isNaN(pEnd) ? pEnd : undefined;
-
-    if (validStart !== undefined && validEnd !== undefined) {
-      return [Math.min(validStart, validEnd), Math.max(validStart, validEnd)];
-    }
-    return [validStart, validEnd];
-  }, [matchedUnit]);
+  const [rangeMin, rangeMax] = React.useMemo(
+    () => getUnitRange(matchedUnit),
+    [matchedUnit]
+  );
 
   const endUnitIndex = matchedUnit ? availableUnits.findIndex((u) => u.id === matchedUnit.id) : -1;
   const canStepToNextUnit = endUnitIndex !== -1 && endUnitIndex < availableUnits.length - 1;
@@ -958,11 +1104,13 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
       setHal('');
       return;
     }
+    let clamped = num;
     if (rangeMin !== undefined && num < rangeMin) {
-      setHal(rangeMin);
+      clamped = rangeMin;
     } else if (rangeMax !== undefined && num > rangeMax) {
-      setHal(rangeMax);
+      clamped = rangeMax;
     }
+    reconcileMaterialOrder('end', startMateri, startHal, materi, clamped);
   };
 
   const handlePageUp = () => {
@@ -970,29 +1118,31 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     const currentNum = parseInt(String(hal), 10);
     if (isNaN(currentNum)) {
       const target = rangeMin !== undefined ? rangeMin : 1;
-      setHal(target);
-      if (!materi && availableUnits.length > 0) {
+      let nextMat = materi;
+      if (!nextMat && availableUnits.length > 0) {
         const uMatch = findUnitForPageWithPartPriority(target);
-        if (uMatch) setMateri(uMatch.id);
+        if (uMatch) nextMat = uMatch.id;
       }
+      reconcileMaterialOrder('end', startMateri, startHal, nextMat, target);
       return;
     }
     if (isAtEndRangeMax) {
       if (canStepToNextUnit) {
         const nextUnit = availableUnits[endUnitIndex + 1];
-        setMateri(nextUnit.id);
         const nextStart = nextUnit.page_start ?? (nextUnit as any).pageStart;
-        setHal(nextStart !== undefined ? Number(nextStart) : 1);
+        const nextPage = nextStart !== undefined ? Number(nextStart) : 1;
         triggerMaterialFlash('end');
+        reconcileMaterialOrder('end', startMateri, startHal, nextUnit.id, nextPage);
       }
       return;
     }
     const nextNum = currentNum + 1;
-    setHal(nextNum);
-    if (!materi && availableUnits.length > 0) {
+    let nextMat = materi;
+    if (!nextMat && availableUnits.length > 0) {
       const uMatch = findUnitForPageWithPartPriority(nextNum);
-      if (uMatch) setMateri(uMatch.id);
+      if (uMatch) nextMat = uMatch.id;
     }
+    reconcileMaterialOrder('end', startMateri, startHal, nextMat, nextNum);
   };
 
   const handlePageDown = () => {
@@ -1000,33 +1150,36 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     const currentNum = parseInt(String(hal), 10);
     if (isNaN(currentNum)) {
       const target = rangeMin !== undefined ? rangeMin : 1;
-      setHal(target);
-      if (!materi && availableUnits.length > 0) {
+      let nextMat = materi;
+      if (!nextMat && availableUnits.length > 0) {
         const uMatch = findUnitForPageWithPartPriority(target);
-        if (uMatch) setMateri(uMatch.id);
+        if (uMatch) nextMat = uMatch.id;
       }
+      reconcileMaterialOrder('end', startMateri, startHal, nextMat, target);
       return;
     }
     if (isAtEndRangeMin) {
       if (canStepToPrevUnit) {
         const prevUnit = availableUnits[endUnitIndex - 1];
-        setMateri(prevUnit.id);
         const prevEnd = prevUnit.page_end ?? (prevUnit as any).pageEnd ?? prevUnit.page_start ?? (prevUnit as any).pageStart;
-        setHal(prevEnd !== undefined ? Number(prevEnd) : 1);
+        const prevPage = prevEnd !== undefined ? Number(prevEnd) : 1;
         triggerMaterialFlash('end');
+        reconcileMaterialOrder('end', startMateri, startHal, prevUnit.id, prevPage);
       }
       return;
     }
     const nextNum = currentNum - 1;
-    setHal(nextNum);
-    if (!materi && availableUnits.length > 0) {
+    let nextMat = materi;
+    if (!nextMat && availableUnits.length > 0) {
       const uMatch = findUnitForPageWithPartPriority(nextNum);
-      if (uMatch) setMateri(uMatch.id);
+      if (uMatch) nextMat = uMatch.id;
     }
+    reconcileMaterialOrder('end', startMateri, startHal, nextMat, nextNum);
   };
 
-  const isMateriDraft = materi !== (baselineSnapshotRef.current?.materi || '');
-  const isHalDraft = String(hal) !== String(baselineSnapshotRef.current?.hal || '');
+  const isMateriDraft = (materi ?? '') !== (baselineSnapshotRef.current?.materi ?? '');
+  const isHalDraft = String(hal ?? '') !== String(baselineSnapshotRef.current?.hal ?? '');
+  const isNotesDraft = (meetingNotes ?? '') !== (baselineSnapshotRef.current?.meetingNotes ?? '');
 
   const filteredStudents = students.filter((s) => {
     if (!searchQuery.trim()) return true;
@@ -1163,25 +1316,14 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                   {displaySession} • {data?.meeting?.subjectName || 'Pelajaran'} • {displayClass}
                 </span>
                 <span className={`text-[10px] truncate block ${isCancelled ? 'text-slate-300' : 'text-white/75'}`}>
-                  {displayMeetingNumber ? `Pertemuan #${displayMeetingNumber}` : ''}{formattedDate ? ` • ${formattedDate}` : ''}
+                  {[
+                    !isCancelled && displayMeetingNumber && displayMeetingNumber > 0 ? `Pertemuan #${displayMeetingNumber}` : '',
+                    formattedDate || '',
+                  ]
+                    .filter(Boolean)
+                    .join(' • ')}
                 </span>
               </div>
-
-              {/* Cancel / Complete Session Button (Admin only) */}
-              {isAdmin && onSetSessionStatus && (
-                <button
-                  type="button"
-                  onClick={() => onSetSessionStatus(meetingId, isCancelled ? 'scheduled' : 'cancelled')}
-                  className={`p-1.5 rounded-lg transition-colors cursor-pointer ml-1 ${
-                    isCancelled
-                      ? 'hidden bg-emerald-600 hover:bg-emerald-700 text-white'
-                      : 'hover:bg-white/15 text-white/80 hover:text-white'
-                  }`}
-                  title={isCancelled ? 'Pulihkan sesi ini' : 'Batalkan sesi ini'}
-                >
-                  <Ban className="w-4 h-4" />
-                </button>
-              )}
             </div>
 
             {/* Right: Discard Draft & Close X */}
@@ -1229,13 +1371,10 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
           )}
 
           {/* ------------------------------------------------------------- */}
-          {/* Scrollable Body with Stable Scrollbar Gutter                   */}
+          {/* Scrollable Body with Sticky Bottom Session Manager Dock       */}
           {/* ------------------------------------------------------------- */}
-          <div
-            className={`flex-1 overflow-y-auto p-4 pr-5 sm:pr-6 space-y-3 [scrollbar-gutter:stable] ${
-              isCancelled ? 'opacity-50' : ''
-            }`}
-          >
+          <div className="flex-1 overflow-y-auto flex flex-col [scrollbar-gutter:stable]">
+            <div className={`flex-1 p-4 pr-5 sm:pr-6 space-y-3 ${isCancelled ? 'opacity-50' : ''}`}>
             {loading ? (
               <div className="py-20 flex flex-col items-center justify-center text-slate-400 gap-2">
                 <Clock className="w-6 h-6 animate-spin text-amber-500" />
@@ -1269,13 +1408,13 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                         onChange={(e) => {
                           const unit = availableUnits.find((u) => u.id === e.target.value);
                           if (unit) {
-                            setStartMateri(unit.id);
                             const startP = unit.page_start ?? (unit as any).pageStart;
-                            if (startP !== undefined && startP !== null && startP !== '') {
-                              setStartHal(startP);
-                            }
+                            const nextStartHal =
+                              startP !== undefined && startP !== null && startP !== '' ? startP : '';
+                            reconcileMaterialOrder('start', unit.id, nextStartHal, materi, hal);
                           } else {
                             setStartMateri('');
+                            setStartHal('');
                           }
                         }}
                         className="flex-1 min-w-0 bg-transparent font-medium text-slate-800 focus:outline-none text-xs cursor-pointer truncate"
@@ -1289,13 +1428,30 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                       </select>
 
                       <div
-                        className="relative flex items-center gap-0.5 shrink-0 bg-white border border-slate-200 rounded-lg pl-1.5 pr-0.5 py-0.5"
+                        className="relative flex items-center gap-0.5 shrink-0 bg-white border border-slate-200 rounded-lg px-0.5 py-0.5"
                         title={
                           startRangeMin !== undefined && startRangeMax !== undefined
                             ? `Rentang halaman materi awal: ${startRangeMin} - ${startRangeMax}`
                             : 'Halaman mulai'
                         }
                       >
+                        <button
+                          type="button"
+                          disabled={isStartDownDisabled}
+                          onClick={handleStartPageDown}
+                          className={`p-0.5 rounded disabled:opacity-20 disabled:pointer-events-none cursor-pointer leading-none transition-colors ${
+                            isStartDownCrossingBoundary
+                              ? 'text-amber-600 bg-amber-50 ring-1 ring-amber-300 hover:bg-amber-100'
+                              : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
+                          }`}
+                          title={isStartDownCrossingBoundary ? 'Kembali ke materi sebelumnya' : startRangeMin !== undefined ? `Kurang halaman (Min: ${startRangeMin})` : 'Kurang halaman'}
+                        >
+                          {isStartDownCrossingBoundary ? (
+                            <SkipBack className="w-3 h-3 stroke-[2.5]" />
+                          ) : (
+                            <ChevronLeft className="w-3 h-3 stroke-[2.5]" />
+                          )}
+                        </button>
                         <input
                           type="text"
                           inputMode="numeric"
@@ -1305,45 +1461,25 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                           onChange={(e) => handleStartPageChange(e.target.value)}
                           onBlur={handleStartPageBlur}
                           placeholder={startRangeMin !== undefined ? String(startRangeMin) : '—'}
-                          className="w-8 bg-transparent text-center font-bold text-slate-800 focus:outline-none text-xs"
+                          className="w-8 bg-transparent text-center font-mono font-bold text-slate-800 focus:outline-none text-xs"
                         />
-                        {/* Up / Down steppers */}
-                        <div className="flex flex-col -my-0.5 border-l border-slate-200 pl-0.5">
-                          <button
-                            type="button"
-                            disabled={isStartDownDisabled}
-                            onClick={handleStartPageDown}
-                            className={`p-0.5 rounded disabled:opacity-20 disabled:pointer-events-none cursor-pointer leading-none transition-colors ${
-                              isStartDownCrossingBoundary
-                                ? 'text-amber-600 bg-amber-50 ring-1 ring-amber-300 hover:bg-amber-100'
-                                : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
-                            }`}
-                            title={isStartDownCrossingBoundary ? 'Kembali ke materi sebelumnya' : startRangeMin !== undefined ? `Kurang halaman (Min: ${startRangeMin})` : 'Kurang halaman'}
-                          >
-                            {isStartDownCrossingBoundary ? (
-                              <SkipBack className="w-2.5 h-2.5 stroke-[2.5] rotate-90" />
-                            ) : (
-                              <ChevronUp className="w-2.5 h-2.5 stroke-[2.5]" />
-                            )}
-                          </button>
-                          <button
-                            type="button"
-                            disabled={isStartUpDisabled}
-                            onClick={handleStartPageUp}
-                            className={`p-0.5 rounded disabled:opacity-20 disabled:pointer-events-none cursor-pointer leading-none transition-colors ${
-                              isStartUpCrossingBoundary
-                                ? 'text-amber-600 bg-amber-50 ring-1 ring-amber-300 hover:bg-amber-100'
-                                : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
-                            }`}
-                            title={isStartUpCrossingBoundary ? 'Lanjut ke materi berikutnya' : startRangeMax !== undefined ? `Tambah halaman (Maks: ${startRangeMax})` : 'Tambah halaman'}
-                          >
-                            {isStartUpCrossingBoundary ? (
-                              <SkipForward className="w-2.5 h-2.5 stroke-[2.5] rotate-90" />
-                            ) : (
-                              <ChevronDown className="w-2.5 h-2.5 stroke-[2.5]" />
-                            )}
-                          </button>
-                        </div>
+                        <button
+                          type="button"
+                          disabled={isStartUpDisabled}
+                          onClick={handleStartPageUp}
+                          className={`p-0.5 rounded disabled:opacity-20 disabled:pointer-events-none cursor-pointer leading-none transition-colors ${
+                            isStartUpCrossingBoundary
+                              ? 'text-amber-600 bg-amber-50 ring-1 ring-amber-300 hover:bg-amber-100'
+                              : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
+                          }`}
+                          title={isStartUpCrossingBoundary ? 'Lanjut ke materi berikutnya' : startRangeMax !== undefined ? `Tambah halaman (Maks: ${startRangeMax})` : 'Tambah halaman'}
+                        >
+                          {isStartUpCrossingBoundary ? (
+                            <SkipForward className="w-3 h-3 stroke-[2.5]" />
+                          ) : (
+                            <ChevronRight className="w-3 h-3 stroke-[2.5]" />
+                          )}
+                        </button>
                         {isStartHalDraft && (
                           <span
                             className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-500 ring-1 ring-white"
@@ -1372,13 +1508,13 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                         onChange={(e) => {
                           const unit = availableUnits.find((u) => u.id === e.target.value);
                           if (unit) {
-                            setMateri(unit.id);
                             const endP = unit.page_end ?? (unit as any).pageEnd ?? unit.page_start ?? (unit as any).pageStart;
-                            if (endP !== undefined && endP !== null && endP !== '') {
-                              setHal(endP);
-                            }
+                            const nextEndHal =
+                              endP !== undefined && endP !== null && endP !== '' ? endP : '';
+                            reconcileMaterialOrder('end', startMateri, startHal, unit.id, nextEndHal);
                           } else {
                             setMateri('');
+                            setHal('');
                           }
                         }}
                         className="flex-1 min-w-0 bg-transparent font-medium text-slate-800 focus:outline-none text-xs cursor-pointer truncate"
@@ -1392,13 +1528,30 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                       </select>
 
                       <div
-                        className="relative flex items-center gap-0.5 shrink-0 bg-white border border-slate-200 rounded-lg pl-1.5 pr-0.5 py-0.5"
+                        className="relative flex items-center gap-0.5 shrink-0 bg-white border border-slate-200 rounded-lg px-0.5 py-0.5"
                         title={
                           rangeMin !== undefined && rangeMax !== undefined
                             ? `Rentang halaman materi akhir: ${rangeMin} - ${rangeMax}`
                             : 'Halaman selesai'
                         }
                       >
+                        <button
+                          type="button"
+                          disabled={isDownDisabled}
+                          onClick={handlePageDown}
+                          className={`p-0.5 rounded disabled:opacity-20 disabled:pointer-events-none cursor-pointer leading-none transition-colors ${
+                            isDownCrossingBoundary
+                              ? 'text-amber-600 bg-amber-50 ring-1 ring-amber-300 hover:bg-amber-100'
+                              : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
+                          }`}
+                          title={isDownCrossingBoundary ? 'Kembali ke materi sebelumnya' : rangeMin !== undefined ? `Kurang halaman (Min: ${rangeMin})` : 'Kurang halaman'}
+                        >
+                          {isDownCrossingBoundary ? (
+                            <SkipBack className="w-3 h-3 stroke-[2.5]" />
+                          ) : (
+                            <ChevronLeft className="w-3 h-3 stroke-[2.5]" />
+                          )}
+                        </button>
                         <input
                           type="text"
                           inputMode="numeric"
@@ -1408,45 +1561,25 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                           onChange={(e) => handlePageChange(e.target.value)}
                           onBlur={handlePageBlur}
                           placeholder={rangeMax !== undefined ? String(rangeMax) : '—'}
-                          className="w-8 bg-transparent text-center font-bold text-slate-800 focus:outline-none text-xs"
+                          className="w-8 bg-transparent text-center font-mono font-bold text-slate-800 focus:outline-none text-xs"
                         />
-                        {/* Up / Down steppers */}
-                        <div className="flex flex-col -my-0.5 border-l border-slate-200 pl-0.5">
-                          <button
-                            type="button"
-                            disabled={isDownDisabled}
-                            onClick={handlePageDown}
-                            className={`p-0.5 rounded disabled:opacity-20 disabled:pointer-events-none cursor-pointer leading-none transition-colors ${
-                              isDownCrossingBoundary
-                                ? 'text-amber-600 bg-amber-50 ring-1 ring-amber-300 hover:bg-amber-100'
-                                : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
-                            }`}
-                            title={isDownCrossingBoundary ? 'Kembali ke materi sebelumnya' : rangeMin !== undefined ? `Kurang halaman (Min: ${rangeMin})` : 'Kurang halaman'}
-                          >
-                            {isDownCrossingBoundary ? (
-                              <SkipBack className="w-2.5 h-2.5 stroke-[2.5] rotate-90" />
-                            ) : (
-                              <ChevronUp className="w-2.5 h-2.5 stroke-[2.5]" />
-                            )}
-                          </button>
-                          <button
-                            type="button"
-                            disabled={isUpDisabled}
-                            onClick={handlePageUp}
-                            className={`p-0.5 rounded disabled:opacity-20 disabled:pointer-events-none cursor-pointer leading-none transition-colors ${
-                              isUpCrossingBoundary
-                                ? 'text-amber-600 bg-amber-50 ring-1 ring-amber-300 hover:bg-amber-100'
-                                : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
-                            }`}
-                            title={isUpCrossingBoundary ? 'Lanjut ke materi berikutnya' : rangeMax !== undefined ? `Tambah halaman (Maks: ${rangeMax})` : 'Tambah halaman'}
-                          >
-                            {isUpCrossingBoundary ? (
-                              <SkipForward className="w-2.5 h-2.5 stroke-[2.5] rotate-90" />
-                            ) : (
-                              <ChevronDown className="w-2.5 h-2.5 stroke-[2.5]" />
-                            )}
-                          </button>
-                        </div>
+                        <button
+                          type="button"
+                          disabled={isUpDisabled}
+                          onClick={handlePageUp}
+                          className={`p-0.5 rounded disabled:opacity-20 disabled:pointer-events-none cursor-pointer leading-none transition-colors ${
+                            isUpCrossingBoundary
+                              ? 'text-amber-600 bg-amber-50 ring-1 ring-amber-300 hover:bg-amber-100'
+                              : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
+                          }`}
+                          title={isUpCrossingBoundary ? 'Lanjut ke materi berikutnya' : rangeMax !== undefined ? `Tambah halaman (Maks: ${rangeMax})` : 'Tambah halaman'}
+                        >
+                          {isUpCrossingBoundary ? (
+                            <SkipForward className="w-3 h-3 stroke-[2.5]" />
+                          ) : (
+                            <ChevronRight className="w-3 h-3 stroke-[2.5]" />
+                          )}
+                        </button>
                         {isHalDraft && (
                           <span
                             className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-500 ring-1 ring-white"
@@ -1464,8 +1597,8 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                         type="button"
                         onClick={() => {
                           const targetUnit =
-                            (targetUnitId && availableUnits.find((u) => u.id === targetUnitId)) ||
-                            (targetMateri && availableUnits.find((u) => u.title === targetMateri || u.id === targetMateri)) ||
+                            (targetUnitId && resolveUnitByIdOrTitle(targetUnitId)) ||
+                            (targetMateri && resolveUnitByIdOrTitle(targetMateri)) ||
                             availableUnits[0];
                           const defMateri = targetUnit ? targetUnit.id : (targetUnitId || targetMateri || '');
 
@@ -1497,10 +1630,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                             }
                           }
 
-                          setStartMateri(defMateri);
-                          setStartHal(defStartHal);
-                          setMateri(defMateri);
-                          setHal(defEndHal);
+                          reconcileMaterialOrder('start', defMateri, defStartHal, defMateri, defEndHal);
                         }}
                         className="p-1 rounded text-[10px] font-semibold hover:bg-emerald-50 text-emerald-600 transition-colors cursor-pointer"
                         title="Isi materi awal & akhir sesuai standar kurikulum"
@@ -1532,8 +1662,8 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                   const isTeacherTimeDraft = teacherTime !== dbTeacherTime || teacherTimeEnd !== dbTeacherTimeEnd;
                   const teacherTimeDisplay = teacherTime
                     ? teacherTimeEnd ? `${teacherTime}-${teacherTimeEnd}` : teacherTime
-                    : teacherTimeEnd ? `--:--${'-'}${teacherTimeEnd}` : '--:--';
-                  const isTeacherFlashing = flashingRowId === 'teacher';
+                    : teacherTimeEnd ? `--:--–${teacherTimeEnd}` : '--:--';
+                  const isTeacherFlashing = flashingRowIds.has('teacher');
 
                   return (
                     <div
@@ -1560,19 +1690,20 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
 
                       <div className="flex items-center gap-1.5 shrink-0">
                         {/* Minimal Time Chip */}
-                        <div className="flex item-center gap-1.5 relative rounded text-[10px] font-mono border transition-all cursor-pointer shrink-0 border-slate-200">
+                        <div className="flex items-center relative rounded text-[10px] font-mono border border-slate-200 bg-white overflow-visible transition-all shrink-0">
                           {isAdmin && (teacherTime || teacherTimeEnd) && (
                             <button
                               type="button"
                               onClick={() => applyTimeChange('teacher', 'teacher', '', '')}
                               title="Hapus jam"
-                              className="hover:bg-rose-100 text-rose-700 border-r border-slate-300 font-semibold transition-colors cursor-pointer"
+                              className="px-0.5 py-0.5 hover:bg-rose-100 text-rose-700 border-r border-slate-200 font-semibold transition-colors cursor-pointer"
                             >
                               <X className="w-3 h-3" />
                             </button>
                           )}
                           <button
                             type="button"
+                            disabled={!isAdmin}
                             onClick={() => {
                               if (!isAdmin) return;
                               setActiveTimePopover({
@@ -1583,12 +1714,14 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                                 endTime: teacherTimeEnd,
                               });
                             }}
-                            className={`relative transition-all mt-1 mr-1 cursor-pointer shrink-0 ${
+                            className={`relative px-1.5 py-0.5 transition-all shrink-0 ${
+                              isAdmin ? 'cursor-pointer' : 'cursor-default'
+                            } ${
                               isTeacherFlashing
                                 ? 'bg-emerald-100 text-emerald-800 ring-2 ring-emerald-400 font-bold animate-pulse'
-                                : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+                                : 'text-slate-600 hover:bg-slate-100 disabled:hover:bg-transparent'
                             }`}
-                            title="Klik untuk melihat atau mengatur jam kehadiran"
+                            title={isAdmin ? 'Klik untuk melihat atau mengatur jam kehadiran' : 'Jam kehadiran pengajar'}
                           >
                             {teacherTimeDisplay}
                           </button>
@@ -1607,9 +1740,9 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                   );
                 })()}
 
-                {/* 3. Student Roster Search & Quick All-Hadir */}
+                {/* 3. Student Roster Search & 3-Element Time/Batch/Mode Control */}
                 <div className="flex items-center justify-between gap-2 pt-1">
-                  <div className="relative flex-1">
+                  <div className="relative flex-1 min-w-0">
                     <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
@@ -1632,29 +1765,28 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                         ? `${currentDefaults.start}-${currentDefaults.end}`
                         : currentDefaults.start || currentDefaults.end || '--:--';
 
-                    const allHadir = students.length > 0 && students.every((s) => s.status === 'Hadir');
-                    const anyTimeDiffers =
-                      isDefaultTimeCustom &&
-                      students.some(
-                        (s) => s.timestampStart !== currentDefaults.start || s.timestampEnd !== currentDefaults.end
-                      );
+                    const allHadirAndTimed =
+                      students.length > 0 &&
+                      students.every((s) => s.status === 'Hadir' && Boolean(s.timestampStart));
 
                     return (
-                      <div className="flex rounded rounded-2xl border border-emerald-200 items-center gap-1.5 shrink-0">
-                        {/* Minimal Session Default Time Chip (Customized indicated via colored font, no dot) */}
+                      <div className="flex rounded-xl border border-slate-200 bg-white items-center gap-1 shrink-0 p-0.5">
+                        {/* 1. Time Display Chip (Live ticking clock in nowTime mode, session start-end in default mode) */}
                         <div
-                          className={`flex items-center ml-2 relative rounded text-[10px] font-mono border transition-all shrink-0 ${
-                            isDefaultTimeCustom
+                          className={`flex items-center relative rounded-lg text-[10px] font-mono tabular-nums border transition-all shrink-0 ${
+                            timeStampMode === 'nowTime'
+                              ? 'border-teal-200 bg-teal-50/70 text-teal-800 font-semibold'
+                              : isDefaultTimeCustom
                               ? 'border-amber-400 bg-amber-50/80 text-amber-700 font-bold'
-                              : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                              : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
                           }`}
                         >
-                          {isDefaultTimeCustom && (
+                          {timeStampMode === 'default' && isDefaultTimeCustom && (
                             <button
                               type="button"
                               onClick={() => setSessionDefaultTimes(null)}
                               title="Reset ke jam jadwal"
-                              className="px-1 py-0 hover:bg-rose-100 text-rose-700 border-r border-amber-200 font-semibold transition-colors cursor-pointer"
+                              className="px-0.5 py-0.5 hover:bg-rose-100 text-rose-700 border-r border-amber-200 font-semibold transition-colors cursor-pointer"
                             >
                               <X className="w-3 h-3" />
                             </button>
@@ -1670,40 +1802,65 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                                 endTime: currentDefaults.end,
                               });
                             }}
-                            className={`px-1 py-0 cursor-pointer shrink-0 transition-colors ${
-                              isDefaultTimeCustom ? 'text-amber-700 font-bold' : 'text-slate-600 hover:text-slate-900'
+                            className={`px-1.5 py-0.5 cursor-pointer shrink-0 transition-colors whitespace-nowrap ${
+                              timeStampMode === 'nowTime'
+                                ? 'text-teal-800'
+                                : isDefaultTimeCustom
+                                ? 'text-amber-700 font-bold'
+                                : 'text-slate-700 hover:text-slate-900'
                             }`}
-                            title="Atur jam default sesi untuk mengisi massal atau default santri"
+                            title={
+                              timeStampMode === 'nowTime'
+                                ? 'Jam real-time (klik untuk mengatur jam default sesi)'
+                                : 'Jam default sesi (klik untuk mengubah jam default)'
+                            }
                           >
-                            {defaultDisplay}
+                            {timeStampMode === 'nowTime' ? liveNowTime : defaultDisplay}
                           </button>
                         </div>
 
-                        {/* Batch Toggle Button */}
+                        {/* 2. Batch Toggle Button (Icon only) */}
                         <button
                           type="button"
                           onClick={() => markAllStudents('Hadir')}
-                          className={`flex items-center gap-1 px-1.5 py-1.5 rounded-full text-xs font-bold transition-colors cursor-pointer shrink-0 ${
-                            allHadir && !anyTimeDiffers
-                              ? 'bg-slate-500 hover:bg-slate-100 text-white hover:text-slate-700'
-                              : 'bg-emerald-500 hover:bg-emerald-100 text-white hover:text-emerald-700'
+                          className={`flex items-center justify-center p-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
+                            allHadirAndTimed
+                              ? 'bg-slate-500 hover:bg-slate-600 text-white'
+                              : 'bg-emerald-500 hover:bg-emerald-600 text-white'
                           }`}
                           title={
-                            allHadir && !anyTimeDiffers
+                            allHadirAndTimed
                               ? 'Batalkan status hadir untuk semua santri'
-                              : anyTimeDiffers
-                              ? 'Terapkan jam default baru ke semua santri'
-                              : 'Tandai semua santri hadir'
+                              : timeStampMode === 'nowTime'
+                              ? 'Tandai semua santri hadir (jam sekarang)'
+                              : 'Tandai semua santri hadir (jam default sesi)'
                           }
                         >
                           <ListChecks className="w-3.5 h-3.5" />
-                          <span className="hidden">
-                            {allHadir && !anyTimeDiffers
-                              ? 'Reset Hadir'
-                              : anyTimeDiffers
-                              ? 'Update Hadir'
-                              : 'Semua Hadir'}
-                          </span>
+                        </button>
+
+                        {/* 3. Mode Toggle Button (Icon only: nowTime vs default) */}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setTimeStampMode((prev) => (prev === 'nowTime' ? 'default' : 'nowTime'))
+                          }
+                          className={`flex items-center justify-center p-1.5 rounded-lg border transition-colors cursor-pointer shrink-0 ${
+                            timeStampMode === 'nowTime'
+                              ? 'bg-teal-50 border-teal-200 text-teal-700 hover:bg-teal-100'
+                              : 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100'
+                          }`}
+                          title={
+                            timeStampMode === 'nowTime'
+                              ? 'Mode Waktu: Live (Real-time) — klik untuk beralih ke Jam Default Sesi'
+                              : 'Mode Waktu: Jam Default Sesi — klik untuk beralih ke Live (Real-time)'
+                          }
+                        >
+                          {timeStampMode === 'nowTime' ? (
+                            <Clock className="w-3.5 h-3.5" />
+                          ) : (
+                            <CalendarClock className="w-3.5 h-3.5" />
+                          )}
                         </button>
                       </div>
                     );
@@ -1729,8 +1886,8 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                         (student.timestampEnd || '') !== dbStudentTimeEnd;
                       const studentTimeDisplay = student.timestampStart
                         ? student.timestampEnd ? `${student.timestampStart}-${student.timestampEnd}` : student.timestampStart
-                        : student.timestampEnd ? `--:--${'-'}${student.timestampEnd}` : '--:--';
-                      const isStudentFlashing = flashingRowId === student.studentId;
+                        : student.timestampEnd ? `--:--–${student.timestampEnd}` : '--:--';
+                      const isStudentFlashing = flashingRowIds.has(student.studentId);
 
                       return (
                         <div
@@ -1763,19 +1920,20 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
 
                           <div className="flex items-center gap-1.5 shrink-0">
                             {/* Minimal Time Chip */}
-                            <div className="flex item-center gap-1.5 relative rounded text-[10px] font-mono border transition-all cursor-pointer shrink-0 border-slate-200">
-                              {isAdmin && (student.timestampStart || student.timestampEnd)  && (
+                            <div className="flex items-center relative rounded text-[10px] font-mono border border-slate-200 bg-white overflow-visible transition-all shrink-0">
+                              {isAdmin && (student.timestampStart || student.timestampEnd) && (
                                 <button
-                                type="button"
-                                onClick={() => applyTimeChange('student', student.studentId, '', '')}
-                                title="Hapus jam"
-                                className="hover:bg-rose-100 text-rose-700 border-r border-slate-300 font-semibold transition-colors cursor-pointer"
+                                  type="button"
+                                  onClick={() => applyTimeChange('student', student.studentId, '', '')}
+                                  title="Hapus jam"
+                                  className="px-0.5 py-0.5 hover:bg-rose-100 text-rose-700 border-r border-slate-200 font-semibold transition-colors cursor-pointer"
                                 >
                                   <X className="w-3 h-3" />
                                 </button>
                               )}
                               <button
                                 type="button"
+                                disabled={!isAdmin}
                                 onClick={() => {
                                   if (!isAdmin) return;
                                   setActiveTimePopover({
@@ -1786,12 +1944,14 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                                     endTime: student.timestampEnd || '',
                                   });
                                 }}
-                                className={`relative transition-all mt-1 mr-1 cursor-pointer shrink-0 ${
+                                className={`relative px-1.5 py-0.5 transition-all shrink-0 ${
+                                  isAdmin ? 'cursor-pointer' : 'cursor-default'
+                                } ${
                                   isStudentFlashing
                                     ? 'bg-emerald-100 text-emerald-800 ring-2 ring-emerald-400 font-bold animate-pulse'
-                                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+                                    : 'text-slate-600 hover:bg-slate-100 disabled:hover:bg-transparent'
                                 }`}
-                                title="Klik untuk melihat atau mengatur jam kehadiran"
+                                title={isAdmin ? 'Klik untuk melihat atau mengatur jam kehadiran' : 'Jam kehadiran santri'}
                               >
                                 {studentTimeDisplay}
                               </button>
@@ -1813,7 +1973,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                 </div>
 
                 {/* Live draft indicator at bottom */}
-                <div className="text-[10px] text-slate-400 text-center py-2">
+                <div className="text-[10px] text-slate-400 text-center py-1">
                   {effectiveHasDraft ? (
                     <span className="text-amber-600 font-semibold">
                       Ada perubahan draft. Menunggu tombol Simpan..
@@ -1823,6 +1983,89 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                   )}
                 </div>
               </>
+            )}
+            </div>
+
+            {/* 5. Sticky Bottom Session Manager Dock (session.note | session.cancel | session.complete) */}
+            {!loading && !error && (isAdmin || meetingNotes.trim() !== '') && (
+              <div
+                className={`sticky bottom-0 z-10 border-t px-4 py-2.5 flex items-center gap-2 backdrop-blur-xs transition-colors shrink-0 ${
+                  isCancelled
+                    ? 'bg-slate-200/95 border-slate-300'
+                    : 'bg-white/95 border-slate-200'
+                }`}
+              >
+                {/* session.note: compact inline text field */}
+                <div className="relative flex-1 min-w-0 flex items-center">
+                  <StickyNote className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none shrink-0" />
+                  <input
+                    ref={noteInputRef}
+                    type="text"
+                    value={meetingNotes}
+                    readOnly={!isAdmin}
+                    onChange={(e) => isAdmin && setMeetingNotes(e.target.value)}
+                    placeholder={isAdmin ? 'Catatan sesi...' : 'Tidak ada catatan'}
+                    className={`w-full pl-8 pr-7 py-1.5 rounded-xl border text-xs text-slate-800 focus:outline-none transition-colors ${
+                      isAdmin
+                        ? 'bg-slate-50 border-slate-200 focus:border-amber-400 focus:bg-white'
+                        : 'bg-slate-100 border-slate-200 text-slate-600 cursor-default'
+                    }`}
+                  />
+                  {isAdmin && meetingNotes && (
+                    <button
+                      type="button"
+                      onClick={() => setMeetingNotes('')}
+                      title="Hapus catatan"
+                      className="absolute right-2 p-0.5 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                  {isNotesDraft && (
+                    <span
+                      className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-500 ring-1 ring-white"
+                      title="Catatan berubah dari database"
+                    />
+                  )}
+                </div>
+
+                {/* session.cancel: Cancel / Restore Session button */}
+                {isAdmin && onSetSessionStatus && (
+                  <button
+                    type="button"
+                    onClick={() => onSetSessionStatus(meetingId, isCancelled ? 'scheduled' : 'cancelled')}
+                    className={`p-2 rounded-xl border transition-colors cursor-pointer shrink-0 ${
+                      isCancelled
+                        ? 'bg-emerald-600 hover:bg-emerald-700 border-emerald-700 text-white'
+                        : 'bg-white hover:bg-rose-50 border-slate-200 hover:border-rose-300 text-slate-600 hover:text-rose-700'
+                    }`}
+                    title={isCancelled ? 'Pulihkan sesi ini' : 'Batalkan sesi ini'}
+                  >
+                    <Ban className="w-4 h-4" />
+                  </button>
+                )}
+
+                {/* session.complete: End Session button (stamps nowTime as endTime for all attendees with startTime) */}
+                {isAdmin && (() => {
+                  const hasAnyStartTime = Boolean(teacherTime) || students.some((s) => Boolean(s.timestampStart));
+                  return (
+                    <button
+                      type="button"
+                      disabled={!hasAnyStartTime}
+                      onClick={handleEndSession}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-[#024884] hover:bg-[#01396a] disabled:opacity-40 disabled:pointer-events-none text-white shadow-2xs transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                      title={
+                        hasAnyStartTime
+                          ? 'Akhiri sesi & catat jam selesai (sekarang) untuk semua yang memiliki jam masuk'
+                          : 'Tandai minimal satu kehadiran sebelum mengakhiri sesi'
+                      }
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                      <span>Akhiri</span>
+                    </button>
+                  );
+                })()}
+              </div>
             )}
           </div>
         </div>

@@ -315,6 +315,7 @@ app.post('/api/attendance/batch-save', async (req, res) => {
   const { statusUpdates, rollCallLogs } = req.body || {};
   try {
     const result = await batchSaveAttendance(tursoClient, { statusUpdates, rollCallLogs });
+    invalidateDatabaseStateCache();
     res.json(result);
   } catch (err: any) {
     console.error('Failed to batch save attendance:', err);
