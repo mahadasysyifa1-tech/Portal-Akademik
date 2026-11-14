@@ -438,14 +438,75 @@ export const AttendanceHistoryModal: React.FC<AttendanceHistoryModalProps> = ({
                 />
               </div>
               <p className="text-[11px] text-slate-500 leading-tight">
-                <span className="font-bold text-slate-800">{displayStats.present}</span> hadir dari total{' '}
-                <span className="font-bold text-slate-800">{displayStats.total}</span> sesi
+              <span className="font-bold text-slate-800">{displayStats.present}</span> hadir dari total{' '}
+              <span className="font-bold text-slate-800">{displayStats.total}</span> sesi
               </p>
-            </div>
-          </div>
-        </div>
+              </div>
+              </div>
 
-        {/* Stat Row: numbers only */}
+              {/* Tight bars, two columns, scrollable — "Semua" plus one per subject.
+                Click a bar to select it. The currently active one is omitted since
+                it's already shown above as the prominent bar. */}
+                {(() => {
+                  const allOption = { key: 'all', label: 'Semua', code: 'Semua', color: undefined as string | undefined };
+                  const subjectOptions = availableSubjects.map((subj) => ({
+                    key: subj.name,
+                    label: subj.name,
+                    code: subj.code,
+                    color: subj.color,
+                  }));
+                  const options = [allOption, ...subjectOptions].filter((o) => o.key !== selectedSubject);
+
+                  if (options.length === 0) return null;
+
+                  return (
+                    <div className="mt-2.5 pt-2.5 border-t border-slate-100 max-h-28 overflow-y-auto pr-1">
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                    {options.map((opt) => {
+                      const isAll = opt.key === 'all';
+                      const optHistory = isAll ? history : history.filter((h) => h.subjectName === opt.key);
+                      const optTotal = optHistory.length;
+                      const optPresent = optHistory.filter(
+                        (h) => h.status === 'Hadir' || h.status === 'Terlambat'
+                      ).length;
+                      const optRate = optTotal > 0 ? Math.round((optPresent / optTotal) * 100) : 0;
+                      const optColor = opt.color || '#64748B';
+
+                    return (
+                      <button
+                      key={opt.key}
+                      type="button"
+                      onClick={() => setSelectedSubject(opt.key)}
+                      title={`${opt.label} — ${optRate}% (${optPresent}/${optTotal} sesi)`}
+                      className="flex items-center gap-2 rounded-lg transition-all cursor-pointer px-1 py-0.5 opacity-60 hover:opacity-100"
+                      >
+                      <span
+                      className={`shrink-0 truncate text-left text-[9px] w-9 ${
+                        isAll ? 'font-bold text-slate-500' : 'font-mono font-bold text-slate-400'
+                      }`}
+                      >
+                      {opt.code}
+                      </span>
+                      <div className="flex-1 min-w-0 rounded-full bg-slate-100 overflow-hidden h-1">
+                      <div
+                      className="h-full rounded-full"
+                      style={{
+                        width: `${Math.min(100, optRate)}%`,
+                            backgroundColor: optColor,
+                            opacity: 0.7,
+                      }}
+                      />
+                      </div>
+                      </button>
+                    );
+                    })}
+                    </div>
+                    </div>
+                  );
+                })()}
+                </div>
+
+                {/* Stat Row: numbers only */}
         <div className="grid grid-cols-6 px-2 sm:px-6 py-2 bg-white border-b border-slate-100 divide-x divide-slate-100">
           {statCells.map((c) => (
             <div key={c.key} className="text-center min-w-0 px-0.5">

@@ -104,7 +104,7 @@ export const DisplayCodeBadge: React.FC<DisplayCodeBadgeProps> = ({
               : 'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-400 hover:text-indigo-600 border border-dashed border-slate-300 hover:border-indigo-300 transition-colors cursor-pointer'
           }
         >
-          <Pencil className="w-2.5 h-2.5" />
+          <Pencil className="w-3.5 h-3.5" />
           {!trimmedValue && <span>Kode</span>}
         </button>
       )}
