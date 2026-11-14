@@ -104,6 +104,15 @@ export const RoleRequestsView: React.FC<RoleRequestsViewProps> = ({ onRefreshCou
         throw new Error(data.error || 'Gagal menyetujui pengajuan.');
       }
       setSuccessMessage(data.message || `Berhasil menyetujui akun ${item.email}.`);
+      window.dispatchEvent(
+        new CustomEvent('role-request:approved', {
+          detail: {
+            role: data.role || item.requestedRole,
+            personId: data.personId || item.requestedPersonId,
+            email: data.email || item.email,
+          },
+        })
+      );
       await fetchRequests();
     } catch (err: any) {
       setError(err.message || 'Terjadi kesalahan saat menyetujui.');

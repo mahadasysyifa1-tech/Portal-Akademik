@@ -38,11 +38,9 @@ export function resolveSlotUnits(
   dayPacingMap: Map<string, PacingSessionProjection[]>
 ): ResolvedSlotUnits {
   const projection = dayPacingMap.get(`${slot.subjectId}_${slot.classId}`) || [];
-  const matched = projection.find(
-    (p) =>
-      p.session.date === dateStr &&
-      (p.session.sessionId === slot.sessionId || p.session.ruleId === slot.ruleId)
-  );
+  const matched =
+    projection.find((p) => p.session.date === dateStr && p.session.sessionId === slot.sessionId) ||
+    projection.find((p) => p.session.date === dateStr && p.session.ruleId === slot.ruleId);
 
   if (matched) {
     return { units: matched.units, meetingIndex: matched.session.meetingIndex };

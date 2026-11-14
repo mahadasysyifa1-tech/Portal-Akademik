@@ -1228,15 +1228,23 @@ export interface PacingStatusResult {
 }
 
 /**
- * Calculates current pacing status (behind vs ahead vs on track) based on the latest recorded session.
+ * Calculates current pacing status (behind vs ahead vs on track) based on the latest recorded session
+ * compared against the pure baseline ('target') projection.
  */
 export function computePacingStatus(
-  db: DatabaseState,
+  db: DatabaseState | undefined,
   subjectId: string,
-  classId: string
+  classId: string,
+  precomputed?: {
+    adjustedProjection?: PacingSessionProjection[];
+    targetProjection?: PacingSessionProjection[];
+    scopedUnits?: SyllabusUnit[];
+    pagesPerSession?: number;
+  }
 ): PacingStatusResult | null {
   if (!subjectId || !classId) return null;
-  const projection = computePacingProjection(db, subjectId, classId);
+  if (!db && (!precomputed?.adjustedProjection || !precomputed?.targetProjection || !precomputed?.scopedUnits)) return null;
+  const projection = precomputed?.adjustedProjection ?? computePacingProjection(db!, subjectId, classId);
   if (!projection || projection.length === 0) return null;
 
   // Find latest meeting that has actual progress recorded
@@ -1245,10 +1253,14 @@ export function computePacingStatus(
   );
   if (recordedSessions.length === 0) return null;
 
+  const targetProjection =
+    precomputed?.targetProjection ??
+    computePacingProjection(db!, subjectId, classId, { viewMode: 'target' });
+
   const latest = recordedSessions[recordedSessions.length - 1];
   const actualPage = latest.session.actual_page!;
   const actualMateriId = latest.session.actual_materi_id;
-  const scopedUnits = getScopedUnits(db, subjectId, classId);
+  const scopedUnits = precomputed?.scopedUnits ?? getScopedUnits(db!, subjectId, classId);
 
   // Helper to calculate cumulative pages across scoped units (handles cut materials, multiple books, and page offsets)
   const getCumulativePage = (unitId: string | undefined, pageNum: number): number => {
@@ -1278,19 +1290,39 @@ export function computePacingStatus(
     return cum;
   };
 
-  const targetUnit = latest.units[latest.units.length - 1] || scopedUnits[0];
+  // Look up matching baseline session from pure target projection
+  const baselineSession =
+    targetProjection.find((p) => p.session.id === latest.session.id) ||
+    targetProjection.find((p) => p.session.date === latest.session.date) ||
+    targetProjection.find((p) => p.session.meetingIndex === latest.session.meetingIndex);
+
+  const baselineUnits = baselineSession?.units || [];
+  const targetUnit = baselineUnits[baselineUnits.length - 1] || scopedUnits[0];
   const rawTarget = targetUnit?.page_end ?? targetUnit?.page_start ?? 0;
-  const targetPage = typeof rawTarget === 'number' ? rawTarget : parseInt(String(rawTarget), 10) || 0;
-  const targetUnitId = targetUnit?.id;
+  const parsedTargetPage = typeof rawTarget === 'number' ? rawTarget : parseInt(String(rawTarget), 10) || 0;
+
+  let fallbackPagesPerSession = precomputed?.pagesPerSession;
+  if (fallbackPagesPerSession === undefined) {
+    const totalScopedPages = scopedUnits.reduce((sum, u) => {
+      const s = Number(u.page_start);
+      const e = Number(u.page_end);
+      return sum + (!Number.isNaN(s) && !Number.isNaN(e) && e >= s ? e - s + 1 : 1);
+    }, 0);
+    const totalTargetSessions = Math.max(1, targetProjection.length || projection.filter((p) => !p.session.isCancelled).length);
+    fallbackPagesPerSession = totalScopedPages / totalTargetSessions;
+  }
 
   const actualCum = getCumulativePage(actualMateriId, actualPage);
-  const targetCum = getCumulativePage(targetUnitId, targetPage);
+  const targetCum =
+    baselineUnits.length > 0
+      ? getCumulativePage(targetUnit?.id, parsedTargetPage)
+      : Math.round(Number(fallbackPagesPerSession || 1) * latest.session.meetingIndex);
   const diff = actualCum - targetCum;
 
   return {
     meetingIndex: latest.session.meetingIndex,
     diff,
     actualPage,
-    targetPage
+    targetPage: baselineUnits.length > 0 ? parsedTargetPage : targetCum
   };
 }

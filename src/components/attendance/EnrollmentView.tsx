@@ -226,15 +226,24 @@ export const EnrollmentView: React.FC<EnrollmentViewProps> = ({
           });
         });
 
-        // 2. Updated student records
-        const studentRecords: StudentRecord[] = nextStudents.map((s) => ({
-          id: s.id,
-          nisn: s.nisn,
-          name: s.name,
-          gender: s.gender,
-          phone: s.phone,
-          enrolledClassIds: s.enrolledClassIds,
-        }));
+        // 2. Updated student records (preserving email & displayCode synced from Turso / role approval)
+        const prevStudentMap = new Map<string, StudentRecord>(
+          (prevDb.students || []).map((st) => [st.id, st])
+        );
+        const studentRecords: StudentRecord[] = nextStudents.map((s) => {
+          const prevSt = prevStudentMap.get(s.id);
+          return {
+            id: s.id,
+            displayCode: prevSt?.displayCode,
+            display_code: prevSt?.display_code,
+            nisn: s.nisn,
+            name: s.name,
+            gender: s.gender,
+            phone: s.phone,
+            email: prevSt?.email,
+            enrolledClassIds: s.enrolledClassIds,
+          };
+        });
 
         // 3. Updated classes with correct live counts
         const classCountMap = new Map<string, number>();

@@ -325,7 +325,7 @@ export const KaldikDayMatrix: React.FC<KaldikDayMatrixProps> = ({
                         <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700">
                           {cls?.name || 'Kelas'}
                         </span>
-                        {meetingIndex !== undefined && (
+                        {status !== 'cancelled' && meetingIndex !== undefined && meetingIndex > 0 && (
                           <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-900 border border-amber-200 shrink-0">
                             Pertemuan #{meetingIndex}
                           </span>

@@ -28,4 +28,7 @@ if (typeof window !== 'undefined') {
     window.addEventListener('attendance:saved', () => {
         invalidateRollCallCache();
     });
+    window.addEventListener('database:saved', () => {
+        invalidateRollCallCache();
+    });
 }

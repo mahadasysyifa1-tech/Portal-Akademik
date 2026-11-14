@@ -331,10 +331,13 @@ export interface MeetingRecord {
 
 export interface StudentRecord {
   id: string;
+  display_code?: string;
+  displayCode?: string;
   nisn?: string;
   name: string;
   gender?: 'L' | 'P';
   phone?: string;
+  email?: string;
   enrolledClassIds?: string[];
   createdAt?: string;
   updatedAt?: string;
@@ -554,6 +557,7 @@ export interface AttendanceHistoryEntry {
   className: string;
   classColor?: string;
   subjectName: string;
+  subjectCode?: string;
   subjectColor?: string;
   teacherName?: string;
   roomName?: string;

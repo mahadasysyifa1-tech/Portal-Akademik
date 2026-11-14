@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { DatabaseState, Book as BookType, Subject } from '../../types';
+import { DatabaseState, Book as BookType, Subject, ClassEntity } from '../../types';
 import {
   BookOpen,
   Search,
@@ -12,8 +12,9 @@ import {
   ChevronDown,
   ChevronUp,
   BookmarkCheck,
-  CheckCircle2,
-  BookMarked
+  BookMarked,
+  Users,
+  GraduationCap
 } from 'lucide-react';
 
 interface BooksDirectoryProps {
@@ -27,7 +28,6 @@ interface BooksDirectoryProps {
 export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
   db,
   initialSelectedBookId,
-  onBackToSchedule,
   onSelectSubject,
   onNavigateToJournal
 }) => {
@@ -55,13 +55,15 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
 
   const subjectMap = useMemo(() => new Map<string, Subject>((db.subjects || []).map((s) => [s.id, s])), [db.subjects]);
   const teacherMap = useMemo(() => new Map((db.teachers || []).map((t) => [t.id, t])), [db.teachers]);
+  const classMap = useMemo(() => new Map<string, ClassEntity>((db.classes || []).map((c) => [c.id, c])), [db.classes]);
 
   // Count how many syllabus units use each book
   const syllabusUnitsByBook = useMemo(() => {
     const map = new Map<string, number>();
     (db.syllabusUnits || []).forEach((u) => {
-      if (u.bookId) {
-        map.set(u.bookId, (map.get(u.bookId) || 0) + 1);
+      const bId = u.bookId || u.bookCode;
+      if (bId) {
+        map.set(bId, (map.get(bId) || 0) + 1);
       }
     });
     return map;
@@ -98,10 +100,11 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
 
       // c) Syllabus units
       for (const u of allUnits) {
-        if (
-          (u.bookId === book.id || (book.displayCode && u.bookCode === book.displayCode)) &&
-          u.subject_id
-        ) {
+        const matchBook =
+          u.bookId === book.id ||
+          u.bookCode === book.id ||
+          (book.displayCode && (u.bookCode === book.displayCode || u.bookId === book.displayCode));
+        if (matchBook && u.subject_id) {
           linkedSubjectIds.add(u.subject_id);
         }
       }
@@ -131,6 +134,53 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
     return map;
   }, [db.books, db.subjects, db.syllabusUnits, db.syllabusScopes, subjectMap]);
 
+  // Gather all classes that study each book (Many-to-Many: from scopes and schedule rules)
+  const classesByBookMap = useMemo(() => {
+    const map = new Map<string, ClassEntity[]>();
+    const allBooks = db.books || [];
+    const allScopes = db.syllabusScopes || [];
+    const allRules = db.rules || [];
+    const allClasses = db.classes || [];
+
+    for (const book of allBooks) {
+      const classIdSet = new Set<string>();
+
+      // 1. From syllabus scopes
+      for (const scope of allScopes) {
+        const hasBook =
+          scope.book_id === book.id ||
+          scope.book_ids?.includes(book.id) ||
+          scope.items?.some((it) => it.bookId === book.id);
+        if (hasBook && scope.class_section_id) {
+          classIdSet.add(scope.class_section_id);
+        }
+      }
+
+      // 2. From active schedule rules for linked subjects
+      const linkedSubjects = subjectsByBookMap.get(book.id) || [];
+      const linkedSubjIds = new Set(linkedSubjects.map((s) => s.id));
+      for (const rule of allRules) {
+        if (rule.active !== false && linkedSubjIds.has(rule.subjectId) && rule.classId) {
+          classIdSet.add(rule.classId);
+        }
+      }
+
+      const resolvedClasses: ClassEntity[] = [];
+      for (const cId of classIdSet) {
+        const cls = classMap.get(cId) || allClasses.find((c) => c.id === cId || c.name === cId || c.displayCode === cId);
+        if (cls && !resolvedClasses.some((existing) => existing.id === cls.id)) {
+          resolvedClasses.push(cls);
+        }
+      }
+
+      // Sort classes chronologically by grade and section
+      resolvedClasses.sort((a, b) => a.grade - b.grade || a.section.localeCompare(b.section));
+      map.set(book.id, resolvedClasses);
+    }
+
+    return map;
+  }, [db.books, db.syllabusScopes, db.rules, db.classes, subjectsByBookMap, classMap]);
+
   const booksList = useMemo(() => {
     return db.books || [];
   }, [db.books]);
@@ -151,52 +201,65 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
           s.name.toLowerCase().includes(q) ||
           (s.code && s.code.toLowerCase().includes(q))
       );
-      return matchTitle || matchAlt || matchAuthor || matchPublisher || matchEdition || matchCode || matchSubject;
+      const linkedClasses = classesByBookMap.get(b.id) || [];
+      const matchClass = linkedClasses.some(
+        (c) =>
+          c.name.toLowerCase().includes(q) ||
+          (c.displayCode && c.displayCode.toLowerCase().includes(q))
+      );
+      return matchTitle || matchAlt || matchAuthor || matchPublisher || matchEdition || matchCode || matchSubject || matchClass;
     });
-  }, [booksList, search, subjectsByBookMap]);
+  }, [booksList, search, subjectsByBookMap, classesByBookMap]);
 
   const toggleExpand = (bookId: string) => {
     setExpandedBookIds((prev) => {
       const next = new Set(prev);
-      if (next.has(bookId)) next.delete(bookId);
-      else next.add(bookId);
+      if (next.has(bookId)) {
+        next.delete(bookId);
+      } else {
+        next.add(bookId);
+      }
       return next;
     });
   };
 
-  // Overall totals
+  // Stats summary
   const totalStats = useMemo(() => {
-    let jilidCount = 0;
-    let pageCount = 0;
-    booksList.forEach((b) => {
+    let volumes = 0;
+    let pages = 0;
+    (db.books || []).forEach((b) => {
       const chs = b.chapters || [];
-      jilidCount += chs.length > 0 ? chs.length : (b.totalChapters || 0);
-      pageCount += chs.length > 0
-        ? chs.reduce((sum, ch) => sum + (Number(ch.pageEnd) || 0), 0)
-        : (b.totalPages || 0);
+      if (chs.length > 0) {
+        volumes += chs.length;
+        pages += chs.reduce((sum, ch) => sum + (Number(ch.pageEnd) || 0), 0);
+      } else {
+        volumes += b.totalChapters || 1;
+        pages += b.totalPages || 0;
+      }
     });
-    return { books: booksList.length, jilids: jilidCount, pages: pageCount };
-  }, [booksList]);
+    return { books: db.books?.length || 0, volumes, pages };
+  }, [db.books]);
 
   return (
     <div className="space-y-4 animate-in fade-in duration-200">
-      {/* Top Header Card */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="relative flex-1 sm:w-64">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+      {/* Search & Stats Bar */}
+      <div className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="relative flex-1 max-w-md">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Cari judul, muallif, mapel..."
-            className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white text-slate-900"
+            placeholder="Cari judul kitab, muallif, penerbit, mapel, atau kelas..."
+            className="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
         </div>
 
-        <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600 bg-slate-100 px-3 py-1.5 rounded-xl shrink-0">
-          <span>{totalStats.books} Kitab</span>
+        <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
+          <span>Koleksi:</span>
+          <span className="text-indigo-700 font-bold">{totalStats.books} Kitab</span>
           <span className="text-slate-300">•</span>
-          <span>{totalStats.jilids} Jilid</span>
+          <span className="text-indigo-700 font-bold">{totalStats.volumes} Jilid</span>
           <span className="text-slate-300">•</span>
           <span className="text-indigo-700 font-bold">{totalStats.pages.toLocaleString('id-ID')} Hal</span>
         </div>
@@ -220,6 +283,7 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
               : (book.totalPages || 0);
 
             const linkedSubjects = subjectsByBookMap.get(book.id) || [];
+            const usedClasses = classesByBookMap.get(book.id) || [];
             const defaultTeacher = book.defaultTeacherId ? teacherMap.get(book.defaultTeacherId) : null;
             const unitCount = syllabusUnitsByBook.get(book.id) || 0;
             const links = book.links || [];
@@ -247,7 +311,7 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
                       {book.title}
                     </h3>
                     {book.altTitle && book.altTitle !== book.title && (
-                      <p className="text-xs text-indigo-900 font-medium mt-0.5" dir="auto">
+                      <p className="text-xs text-indigo-900 font-medium mt-0.5 font-arabic" dir="auto">
                         {book.altTitle}
                       </p>
                     )}
@@ -275,7 +339,7 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
                       <div className="flex items-center gap-2">
                         <BookMarked className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                         <span className="truncate">
-                          <strong className="text-slate-700">Edisi:</strong> {book.edition}
+                          <strong className="text-slate-700">Edisi / Cetakan:</strong> {book.edition}
                         </span>
                       </div>
                     )}
@@ -285,7 +349,7 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
                       <div className="flex items-center gap-1.5 text-slate-700">
                         <Layers className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                         <strong className="text-slate-700 font-semibold">
-                          Mapel Pengguna ({linkedSubjects.length}):
+                          Mapel Terkait ({linkedSubjects.length}):
                         </strong>
                       </div>
                       {linkedSubjects.length > 0 ? (
@@ -296,7 +360,7 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
                               type="button"
                               onClick={() => onSelectSubject?.(sub.id)}
                               className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/60 text-slate-800 transition-colors cursor-pointer shadow-2xs group"
-                              title={`Buka jurnal & silabus ${sub.name}`}
+                              title={`Buka silabus mapel ${sub.name}`}
                             >
                               <span
                                 className="w-2 h-2 rounded-full shrink-0"
@@ -313,8 +377,43 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
                       )}
                     </div>
 
+                    {/* Classes Studying this Book (Bi-directional Multi-Class Support) */}
+                    <div className="pt-1 border-t border-slate-200/60 space-y-1">
+                      <div className="flex items-center gap-1.5 text-slate-700">
+                        <Users className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                        <strong className="text-slate-700 font-semibold">
+                          Kelas Pengguna ({usedClasses.length}):
+                        </strong>
+                      </div>
+                      {usedClasses.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5 pt-0.5">
+                          {usedClasses.map((cls) => (
+                            <span
+                              key={cls.id}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-white border border-indigo-200 text-indigo-800 shadow-2xs"
+                              title={`Kelas ${cls.name} (Tingkat ${cls.grade} - Seksi ${cls.section})`}
+                            >
+                              {cls.color ? (
+                                <span
+                                  className="w-1.5 h-1.5 rounded-full shrink-0"
+                                  style={{ backgroundColor: cls.color }}
+                                />
+                              ) : (
+                                <GraduationCap className="w-3 h-3 text-indigo-500 shrink-0" />
+                              )}
+                              <span>{cls.name}</span>
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-[11px] text-slate-400 italic block pl-5">
+                          Belum dialokasikan ke jadwal kelas
+                        </span>
+                      )}
+                    </div>
+
                     {defaultTeacher && (
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 pt-0.5">
                         <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                         <span className="truncate">
                           <strong className="text-slate-700">Pengampu:</strong>{' '}
@@ -322,11 +421,12 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
                         </span>
                       </div>
                     )}
+
                     {unitCount > 0 && (
                       <div className="flex items-center gap-2">
                         <BookmarkCheck className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                         <span>
-                          <strong className="text-slate-700">Silabus:</strong> {unitCount} materi terdaftar
+                          <strong className="text-slate-700">Silabus:</strong> {unitCount} bab materi terdaftar
                         </span>
                       </div>
                     )}
@@ -371,7 +471,7 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
                     </div>
                   )}
 
-                  {/* Expandable Chapters/Jilid List */}
+                  {/* Expandable Chapters/Jilid List (Polished Carousel/Slider Card) */}
                   {chapters.length > 0 && (
                     <div className="border-t border-slate-100 pt-2">
                       <button
@@ -391,15 +491,15 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
                       </button>
 
                       {isExpanded && (
-                        <div className="mt-2 space-y-1.5 bg-slate-50 p-2.5 rounded-xl border border-slate-200/80 animate-in fade-in duration-150">
+                        <div className="mt-2 space-y-1.5 bg-slate-50 p-2.5 rounded-xl border border-slate-200/80 animate-in fade-in duration-150 max-h-48 overflow-y-auto">
                           {chapters.map((ch, idx) => (
                             <div
                               key={ch.id || idx}
-                              className="bg-white p-2 rounded-lg border border-slate-200 text-xs flex items-center justify-between gap-2"
+                              className="bg-white p-2 rounded-lg border border-slate-200 text-xs flex items-center justify-between gap-2 shadow-2xs"
                             >
                               <div className="min-w-0">
                                 <span className="font-bold text-slate-900 block truncate">
-                                  {ch.title || `Jilid ${ch.chapterNumber}`}
+                                  {ch.title || `Jilid ${ch.chapterNumber ?? (idx + 1)}`}
                                 </span>
                                 {ch.description && (
                                   <span className="text-[10px] text-slate-500 block truncate">
@@ -422,11 +522,11 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
                   )}
                 </div>
 
-                {/* Card Footer: Action button */}
+                {/* Card Footer: Silabus & Jurnal Action Buttons */}
                 {onSelectSubject && linkedSubjects.length > 0 && (
                   <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <span className="text-[11px] text-slate-500 shrink-0">
-                      {linkedSubjects.length === 1 ? 'Silabus & jurnal:' : `Buka Jurnal (${linkedSubjects.length} Mapel):`}
+                    <span className="text-[11px] text-slate-500 shrink-0 font-medium">
+                      {linkedSubjects.length === 1 ? 'Silabus Mapel:' : `Silabus (${linkedSubjects.length} Mapel):`}
                     </span>
                     <div className="flex flex-wrap gap-1">
                       {linkedSubjects.map((sub) => (
@@ -434,19 +534,19 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
                           key={sub.id}
                           type="button"
                           onClick={() => {
-                            if (onNavigateToJournal) {
-                              onNavigateToJournal(sub.id, '', '');
-                            } else if (onSelectSubject) {
+                            if (onSelectSubject) {
                               onSelectSubject(sub.id);
+                            } else if (onNavigateToJournal) {
+                              onNavigateToJournal(sub.id, '', '');
                             }
                           }}
                           className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold text-indigo-700 bg-white border border-indigo-200 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer shadow-2xs"
-                          title={`Buka jurnal materi ${sub.name}`}
+                          title={`Buka silabus pembelajaran ${sub.name}`}
                         >
-                        <ExternalLink
-                          className="w-3.5 h-3.5 shrink-0"
-                          style={{ color: sub.color || '#3B82F6' }}
-                        />
+                          <span
+                            className="w-2 h-2 rounded-full shrink-0"
+                            style={{ backgroundColor: sub.color || '#3B82F6' }}
+                          />
                           <span className="truncate max-w-[130px]">{sub.name}</span>
                         </button>
                       ))}

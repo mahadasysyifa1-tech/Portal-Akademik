@@ -501,7 +501,10 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
                 onToggleSessionStatus={(meetingId, currentStatus) =>
                   setStatusOrClear(meetingId, currentStatus === 'cancelled' ? 'scheduled' : 'cancelled')
                 }
-                onDiscardSessionDraft={(meetingId) => store.discardDraft(meetingId)}
+                onDiscardSessionDraft={(mId) => {
+                  store.discardDraft(mId);
+                  store.restoreMeetingDraftInDb(onUpdateDb, mId);
+                }}
                 onOpenAttendanceModal={(slot, meeting) => setActiveAttendance({ slot, meeting })}
               />
             )
@@ -527,7 +530,7 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
         );
         const meetingId = buildMeetingId(dateStr, slot.classId, slot.sessionId, dayMeeting?.id);
         const scopedUnits = getScopedUnits(db, slot.subjectId, slot.classId);
-        const { units } = resolveSlotUnits(db, slot, dateStr, dayPacingMap);
+        const { units, meetingIndex } = resolveSlotUnits(db, slot, dateStr, dayPacingMap);
         const titles = units.map((u) => u.title).join(', ');
         const lastUnit = units[units.length - 1] || scopedUnits[0];
         const maxPage = lastUnit?.page_end ?? lastUnit?.page_start;
@@ -568,82 +571,29 @@ export const KaldikView: React.FC<KaldikViewProps> = ({
             isAdmin={canEditSlot}
             meetingId={meetingId}
 
-            meetingNumber={dayMeeting?.meeting_index ?? (dayMeeting as any)?.meetingIndex}
+            meetingNumber={meetingIndex !== undefined ? meetingIndex : (dayMeeting?.meeting_index ?? (dayMeeting as any)?.meetingIndex)}
             isOpen={true}
             onClose={() => setActiveAttendance(null)}
-            onSaved={() => setActiveAttendance(null)}
             initialDraft={store.getRollCallDraft(meetingId)}
-            onSaveDraft={(payload) => {
-              store.setRollCallDraft(meetingId, payload);
-              if (payload.materialProgress) {
-                const {
-                  materi: draftMateri,
-                  unitId,
-                  hal: draftHal,
-                  startMateri: draftStartMateri,
-                  startUnitId,
-                  startHal: draftStartHal,
-                } = payload.materialProgress as any;
-                const numHal = draftHal !== undefined && draftHal !== '' ? Number(draftHal) : undefined;
-                const numStartHal = draftStartHal !== undefined && draftStartHal !== '' ? Number(draftStartHal) : undefined;
-                onUpdateDb((prev) => {
-                  const meetings = prev.meetings || [];
-                  const exists = meetings.some((m) => m.id === meetingId);
-                  const updated = exists
-                    ? meetings.map((m) =>
-                        m.id === meetingId
-                          ? {
-                              ...m,
-                              actual_materi_id: unitId || draftMateri || m.actual_materi_id,
-                              actual_page: numHal !== undefined ? numHal : m.actual_page,
-                              actual_start_materi_id: startUnitId || draftStartMateri || m.actual_start_materi_id,
-                              actual_start_page: numStartHal !== undefined ? numStartHal : m.actual_start_page,
-                              notes: payload.meetingNotes !== undefined ? payload.meetingNotes : m.notes,
-                            }
-                          : m
-                      )
-                    : [
-                        ...meetings,
-                        {
-                          id: meetingId,
-                          meeting_date: dateStr,
-                          class_id: slot.classId,
-                          subject_id: slot.subjectId,
-                          teacher_id: slot.teacherId,
-                          room_id: slot.roomId,
-                          session_id: slot.sessionId,
-                          status: 'scheduled',
-                          actual_materi_id: unitId || draftMateri,
-                          actual_page: numHal,
-                          actual_start_materi_id: startUnitId || draftStartMateri,
-                          actual_start_page: numStartHal,
-                          notes: payload.meetingNotes,
-                        } as any,
-                      ];
-                  return { ...prev, meetings: updated };
-                });
-              }
+            onSaveDraft={(payload, options) => {
+              const isSessionCancelled =
+                options?.preserveCancelled ??
+                store.getEffectiveStatus(meetingId, dayMeeting?.status) === 'cancelled';
+              store.setRollCallDraft(meetingId, payload, { preserveCancelled: isSessionCancelled });
+              store.syncMeetingDraftToDb(onUpdateDb, meetingId, payload, {
+                meeting_date: dateStr,
+                meeting_index: meetingIndex !== undefined ? meetingIndex : (dayMeeting?.meeting_index ?? (dayMeeting as any)?.meetingIndex),
+                class_id: slot.classId,
+                subject_id: slot.subjectId,
+                teacher_id: slot.teacherId,
+                room_id: slot.roomId,
+                session_id: slot.sessionId,
+                status: isSessionCancelled ? 'cancelled' : (dayMeeting?.status || 'scheduled'),
+              });
             }}
             onDiscardDraft={() => {
               store.discardDraft(meetingId);
-              onUpdateDb((prev) => {
-                const meetings = prev.meetings || [];
-                return {
-                  ...prev,
-                  meetings: meetings.map((m) =>
-                    m.id === meetingId
-                      ? {
-                          ...m,
-                          actual_materi_id: (dayMeeting as any)?.actual_materi_id,
-                          actual_page: (dayMeeting as any)?.actual_page,
-                          actual_start_materi_id: (dayMeeting as any)?.actual_start_materi_id,
-                          actual_start_page: (dayMeeting as any)?.actual_start_page,
-                          notes: (dayMeeting as any)?.notes,
-                        }
-                      : m
-                  ),
-                };
-              });
+              store.restoreMeetingDraftInDb(onUpdateDb, meetingId);
             }}
             getEffectiveStatus={store.getEffectiveStatus}
             hasDraft={store.isMeetingDrafted(meetingId)}

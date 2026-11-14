@@ -39,6 +39,7 @@ import {
   getPendingRoleRequests,
   approveRoleRequest,
   rejectRoleRequest,
+  updatePeopleDisplayCodes,
 } from './server/db/auth.ts';
 
 const app = express();
@@ -241,10 +242,37 @@ app.post('/api/auth/approve-request', async (req, res) => {
   }
   try {
     const result = await approveRoleRequest(tursoClient, targetUid);
+    invalidateDatabaseStateCache();
     res.json(result);
   } catch (err: any) {
     console.error('Failed to approve role request:', err);
     res.status(400).json({ error: err.message || 'Gagal menyetujui pengajuan' });
+  }
+});
+
+app.post('/api/directory/display-code', async (req, res) => {
+  if (!tursoClient) {
+    return res.status(503).json({ error: 'Turso database is offline' });
+  }
+  const { actorUid, updates, personType, personId, displayCode } = req.body || {};
+  const list = Array.isArray(updates)
+    ? updates
+    : personType && personId
+      ? [{ personType, personId, displayCode: displayCode ?? '' }]
+      : [];
+
+  if (!actorUid || list.length === 0) {
+    return res.status(400).json({ error: 'Field actorUid dan daftar pembaruan displayCode wajib diisi.' });
+  }
+
+  try {
+    const result = await updatePeopleDisplayCodes(tursoClient, actorUid, list);
+    invalidateDatabaseStateCache();
+    res.json(result);
+  } catch (err: any) {
+    console.error('Failed to update displayCode:', err);
+    const status = String(err?.message || '').includes('izin') ? 403 : 400;
+    res.status(status).json({ error: err.message || 'Gagal menyimpan kode tampilan' });
   }
 });
 
@@ -315,6 +343,7 @@ app.post('/api/attendance/batch-save', async (req, res) => {
   const { statusUpdates, rollCallLogs } = req.body || {};
   try {
     const result = await batchSaveAttendance(tursoClient, { statusUpdates, rollCallLogs });
+    invalidateDatabaseStateCache();
     res.json(result);
   } catch (err: any) {
     console.error('Failed to batch save attendance:', err);

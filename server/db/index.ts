@@ -69,6 +69,7 @@ async function ensureTursoSchemas() {
     // Idempotent migration for helper columns on attnd_meeting and students
     const helperColumns = [
       'ALTER TABLE students ADD COLUMN email TEXT',
+      'ALTER TABLE students ADD COLUMN display_code TEXT',
       'ALTER TABLE app_users ADD COLUMN requested_role TEXT',
       'ALTER TABLE app_users ADD COLUMN requested_person_id TEXT',
       'ALTER TABLE app_users ADD COLUMN request_status TEXT DEFAULT "none"',
@@ -410,7 +411,10 @@ function mapMetadataRows(
 
   const teachers: Teacher[] = rawTeachers.map((t) => {
     const teacherId = String(t.id || t.code);
-    const dispCode = t.display_code || t.panggilan || t.code || teacherId;
+    const dispCode =
+      t.display_code !== null && t.display_code !== undefined
+        ? String(t.display_code)
+        : (t.panggilan || t.code || teacherId);
     return {
       id: teacherId,
       display_code: dispCode,
@@ -844,13 +848,19 @@ export async function getDatabaseState(forceRefresh = false): Promise<DatabaseSt
     meetingsRows = mRes.rows as any[];
   } catch {}
 
-  const students = studentsRows.map((s) => ({
-    id: String(s.id),
-    nisn: String(s.nisn || ''),
-    name: String(s.name || ''),
-    gender: (s.gender === 'P' ? 'P' : 'L') as 'L' | 'P',
-    phone: s.phone ? String(s.phone) : undefined,
-  }));
+  const students = studentsRows.map((s) => {
+    const dispCode = s.display_code !== null && s.display_code !== undefined ? String(s.display_code) : '';
+    return {
+      id: String(s.id),
+      displayCode: dispCode,
+      display_code: dispCode,
+      nisn: String(s.nisn || ''),
+      name: String(s.name || ''),
+      gender: (s.gender === 'P' ? 'P' : 'L') as 'L' | 'P',
+      phone: s.phone ? String(s.phone) : undefined,
+      email: s.email ? String(s.email) : undefined,
+    };
+  });
 
   const enrollments = enrollRows.map((e) => ({
     id: Number(e.id),
@@ -1270,7 +1280,12 @@ async function saveTursoMetadata(client: Client, state: DatabaseState) {
     for (const tch of state.teachers) {
       if (!tch.id || seenIds.has(tch.id)) continue;
       seenIds.add(tch.id);
-      const dispCode = tch.display_code || tch.displayCode || tch.panggilan || (tch as any).code || tch.id;
+      const dispCode =
+        tch.display_code !== undefined
+          ? tch.display_code
+          : tch.displayCode !== undefined
+            ? tch.displayCode
+            : (tch.panggilan || (tch as any).code || tch.id);
       statements.push({
         sql: `INSERT INTO teachers (id, display_code, name, panggilan, email, department, max_periods_per_week, color, updated_at)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)

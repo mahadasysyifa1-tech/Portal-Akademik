@@ -14,10 +14,13 @@ import type {
 // ----------------------------------------------------------------------------
 export interface StudentRecord {
   id: string;
+  displayCode?: string;
+  display_code?: string;
   nisn: string;
   name: string;
   gender: 'L' | 'P';
   phone?: string;
+  email?: string;
 }
 
 export interface MeetingSummaryRow {
@@ -1219,16 +1222,21 @@ export async function upsertStudent(
   classId?: string
 ): Promise<void> {
   const id = student.id || `std-${Date.now()}`;
+  const dispCodeRaw = student.display_code ?? student.displayCode;
+  const dispCode = dispCodeRaw !== undefined && String(dispCodeRaw).trim() !== '' ? String(dispCodeRaw).trim() : null;
+  const emailVal = student.email && String(student.email).trim() !== '' ? String(student.email).trim() : null;
   await client.execute({
-    sql: `INSERT INTO students (id, nisn, name, gender, phone, updated_at)
-          VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    sql: `INSERT INTO students (id, display_code, nisn, name, gender, phone, email, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
           ON CONFLICT(id) DO UPDATE SET
+            display_code = excluded.display_code,
             nisn = excluded.nisn,
             name = excluded.name,
             gender = excluded.gender,
             phone = excluded.phone,
+            email = excluded.email,
             updated_at = CURRENT_TIMESTAMP`,
-    args: [id, student.nisn || null, student.name, student.gender || 'L', student.phone || null],
+    args: [id, dispCode, student.nisn || null, student.name, student.gender || 'L', student.phone || null, emailVal],
   });
 
   if (classId) {
@@ -1248,7 +1256,7 @@ export async function deleteStudentRecord(
 
 export async function saveAllEnrollmentData(
   client: Client,
-  students?: Array<{ id: string; nisn?: string; name: string; gender?: string; phone?: string }>,
+  students?: Array<{ id: string; displayCode?: string; display_code?: string; nisn?: string; name: string; gender?: string; phone?: string; email?: string }>,
   enrollments?: Array<{ classId: string; studentId: string; teacherId?: string; academicYear?: string; active?: number | boolean }>
 ): Promise<void> {
   const statements: Array<{ sql: string; args?: any[] }> = [];
@@ -1261,16 +1269,21 @@ export async function saveAllEnrollmentData(
       if (!s.id || seenStd.has(s.id)) continue;
       seenStd.add(s.id);
       studentIds.push(s.id);
+      const dispCodeRaw = s.display_code ?? s.displayCode;
+      const dispCode = dispCodeRaw !== undefined && String(dispCodeRaw).trim() !== '' ? String(dispCodeRaw).trim() : null;
+      const emailVal = s.email && String(s.email).trim() !== '' ? String(s.email).trim() : null;
       statements.push({
-        sql: `INSERT INTO students (id, nisn, name, gender, phone, updated_at)
-              VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        sql: `INSERT INTO students (id, display_code, nisn, name, gender, phone, email, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
               ON CONFLICT(id) DO UPDATE SET
+                display_code = excluded.display_code,
                 nisn = excluded.nisn,
                 name = excluded.name,
                 gender = excluded.gender,
                 phone = excluded.phone,
+                email = excluded.email,
                 updated_at = CURRENT_TIMESTAMP`,
-        args: [s.id, s.nisn || null, s.name, s.gender || 'L', s.phone || null],
+        args: [s.id, dispCode, s.nisn || null, s.name, s.gender || 'L', s.phone || null, emailVal],
       });
     }
 
@@ -1785,6 +1798,7 @@ export async function getPersonAttendanceHistory(
       c.name as class_name,
       c.color as class_color,
       s.name as subject_name,
+      s.display_code as subject_code,
       s.color as subject_color,
       t.name as teacher_name,
       r.name as room_name,
@@ -1822,6 +1836,7 @@ export async function getPersonAttendanceHistory(
     className: r.class_name ? String(r.class_name) : 'Kelas',
     classColor: r.class_color ? String(r.class_color) : undefined,
     subjectName: r.subject_name ? String(r.subject_name) : 'Pelajaran',
+    subjectCode: r.subject_code ? String(r.subject_code) : undefined,
     subjectColor: r.subject_color ? String(r.subject_color) : undefined,
     teacherName: r.teacher_name ? String(r.teacher_name) : 'Pengajar',
     roomName: r.room_name ? String(r.room_name) : 'Ruangan',

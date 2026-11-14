@@ -380,7 +380,14 @@ export async function getPendingRoleRequests(client: Client): Promise<{ requests
 export async function approveRoleRequest(
   client: Client,
   targetUid: string
-): Promise<{ success: boolean; message: string }> {
+): Promise<{
+  success: boolean;
+  message: string;
+  role: 'teacher' | 'student';
+  personId: string;
+  personName: string;
+  email: string;
+}> {
   if (!targetUid) throw new Error('Target UID is required.');
 
   // Find target request
@@ -476,7 +483,63 @@ export async function approveRoleRequest(
   return {
     success: true,
     message: `Berhasil menyetujui pengajuan akun untuk ${email} sebagai ${personName}.`,
+    role: requestedRole,
+    personId,
+    personName,
+    email,
   };
+}
+
+/**
+ * Update display_code for teachers or students, enforcing ownership or admin permission.
+ */
+export async function updatePeopleDisplayCodes(
+  client: Client,
+  actorUid: string,
+  updates: Array<{ personType: 'teacher' | 'student'; personId: string; displayCode: string }>
+): Promise<{ success: boolean; updatedCount: number }> {
+  if (!actorUid) {
+    throw new Error('Autentikasi diperlukan.');
+  }
+  const actorRes = await client.execute({
+    sql: 'SELECT uid, role, teacher_id, student_id FROM app_users WHERE uid = ? LIMIT 1',
+    args: [actorUid],
+  });
+  if (actorRes.rows.length === 0) {
+    throw new Error('Akun pengguna tidak ditemukan.');
+  }
+  const actor = actorRes.rows[0];
+  const actorRole = String(actor.role || 'guest');
+  const actorTeacherId = actor.teacher_id ? String(actor.teacher_id) : '';
+  const actorStudentId = actor.student_id ? String(actor.student_id) : '';
+
+  const statements: Array<{ sql: string; args: any[] }> = [];
+  for (const item of updates) {
+    if (!item || !item.personId || (item.personType !== 'teacher' && item.personType !== 'student')) {
+      continue;
+    }
+    const isAllowed =
+      actorRole === 'admin' ||
+      (item.personType === 'teacher' && actorRole === 'teacher' && actorTeacherId === item.personId) ||
+      (item.personType === 'student' && actorRole === 'student' && actorStudentId === item.personId);
+
+    if (!isAllowed) {
+      throw new Error('Anda tidak memiliki izin untuk mengubah kode tampilan entitas ini.');
+    }
+
+    const trimmed = String(item.displayCode ?? '').trim();
+    const table = item.personType === 'teacher' ? 'teachers' : 'students';
+    statements.push({
+      sql: `UPDATE ${table} SET display_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      args: [trimmed === '' ? '' : trimmed, item.personId],
+    });
+  }
+
+  if (statements.length > 0) {
+    await client.batch(statements as any, 'write');
+  }
+
+  return { success: true, updatedCount: statements.length };
 }
 
 /**

@@ -295,6 +295,7 @@ CREATE INDEX IF NOT EXISTS idx_scope_items_book ON syllabus_scope_items(book_cod
 export const ATTENDANCE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS students (
     id TEXT PRIMARY KEY,
+    display_code TEXT,
     nisn TEXT UNIQUE,
     name TEXT NOT NULL,
     gender TEXT CHECK (gender IN ('L', 'P')),

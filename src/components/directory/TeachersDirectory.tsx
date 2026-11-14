@@ -2,12 +2,16 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { DatabaseState, Teacher, AttendanceSummaryItem } from '../../types';
 import { Users, Search, Mail, BookOpen, Clock, ArrowLeft } from 'lucide-react';
 import { AttendanceHistoryModal } from './AttendanceHistoryModal';
+import { DisplayCodeBadge } from './DisplayCodeBadge';
+import { useAuth } from '../../context/AuthContext';
 
 export interface TeacherCardProps {
   teacher: Teacher;
   stats?: { sessions: number; subjects: Set<string> };
   taughtSubjects?: Array<any>;
   summary?: AttendanceSummaryItem;
+  canEditDisplayCode?: boolean;
+  onEditDisplayCode?: (teacherId: string, nextDisplayCode: string) => void;
   onOpenHistory?: (teacher: Teacher) => void;
   onSelectSchedule?: (teacherId: string) => void;
 }
@@ -17,6 +21,8 @@ export const TeacherCard: React.FC<TeacherCardProps> = ({
   stats = { sessions: 0, subjects: new Set() },
   taughtSubjects = [],
   summary,
+  canEditDisplayCode = false,
+  onEditDisplayCode,
   onOpenHistory,
   onSelectSchedule
 }) => {
@@ -36,6 +42,11 @@ export const TeacherCard: React.FC<TeacherCardProps> = ({
                   {teacher.panggilan}
                 </span>
               )}
+              <DisplayCodeBadge
+                value={teacher.displayCode ?? teacher.display_code ?? ''}
+                canEdit={canEditDisplayCode}
+                onStageChange={(next) => onEditDisplayCode?.(teacher.id, next)}
+              />
             </div>
             <span className="text-[11px] text-slate-500">
               {teacher.department || 'Pengajar'}
@@ -150,13 +161,16 @@ interface TeachersDirectoryProps {
   db: DatabaseState;
   onBackToSchedule: () => void;
   onSelectTeacherSchedule: (teacherId: string) => void;
+  onEditTeacherDisplayCode?: (teacherId: string, nextDisplayCode: string) => void;
 }
 
 export const TeachersDirectory: React.FC<TeachersDirectoryProps> = ({
   db,
   onBackToSchedule,
-  onSelectTeacherSchedule
+  onSelectTeacherSchedule,
+  onEditTeacherDisplayCode
 }) => {
+  const auth = useAuth();
   const [search, setSearch] = useState('');
   const [summaryMap, setSummaryMap] = useState<Record<string, AttendanceSummaryItem>>({});
   const [activeTeacherForHistory, setActiveTeacherForHistory] = useState<Teacher | null>(null);
@@ -183,6 +197,7 @@ export const TeachersDirectory: React.FC<TeachersDirectoryProps> = ({
       return (
         t.name.toLowerCase().includes(q) ||
         (t.panggilan && t.panggilan.toLowerCase().includes(q)) ||
+        (t.displayCode && t.displayCode.toLowerCase().includes(q)) ||
         (t.email && t.email.toLowerCase().includes(q)) ||
         (t.department && t.department.toLowerCase().includes(q))
       );
@@ -237,6 +252,10 @@ export const TeachersDirectory: React.FC<TeachersDirectoryProps> = ({
               stats={stats}
               taughtSubjects={taughtSubjects}
               summary={summaryMap[teacher.id]}
+              canEditDisplayCode={Boolean(
+                onEditTeacherDisplayCode && (auth.isAdmin || (auth.isTeacher && auth.teacherId === teacher.id))
+              )}
+              onEditDisplayCode={onEditTeacherDisplayCode}
               onOpenHistory={setActiveTeacherForHistory}
               onSelectSchedule={onSelectTeacherSchedule}
             />
