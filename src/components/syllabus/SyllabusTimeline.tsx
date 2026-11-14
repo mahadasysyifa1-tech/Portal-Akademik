@@ -311,7 +311,6 @@ export const SyllabusTimeline: React.FC<SyllabusTimelineProps> = ({
             const isToday = session.date === todayStr;
             const isFuture = session.date > todayStr;
             const isTargetHighlighted = activeHighlightDate === session.date;
-            const isCurrent = currentSessionItem?.session.id === session.id;
 
             const isRecorded = !isTargetMode && !isCancelled && Boolean(
               (typeof session.actual_page === 'number' && session.actual_page > 0) ||
@@ -328,10 +327,7 @@ export const SyllabusTimeline: React.FC<SyllabusTimelineProps> = ({
             return (
               <div
                 key={session.id}
-                ref={(el) => {
-                  if (isCurrent) currentSessionRef.current = el;
-                  if (isToday || isTargetHighlighted) todayRowRef.current = el;
-                }}
+                data-session-date={session.date}
                 className={`rounded-2xl border transition-all p-4 relative overflow-hidden ${
                   isCancelled
                     ? 'bg-rose-50/40 border-rose-200/80'

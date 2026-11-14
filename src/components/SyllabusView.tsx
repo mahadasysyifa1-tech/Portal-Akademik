@@ -120,17 +120,6 @@ export const SyllabusView: React.FC<SyllabusViewProps> = ({
     };
   }, [onClearInitialDeepLink]);
 
-  // Auto-scroll to today or highlighted date once journal view renders
-  useEffect(() => {
-    if (selectedSubjectId && selectedClassId) {
-      const timer = setTimeout(() => {
-        if (todayRowRef.current) {
-          todayRowRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-      }, 200);
-      return () => clearTimeout(timer);
-    }
-  }, [selectedSubjectId, selectedClassId, activeHighlightDate]);
 
   // Filter subjects in "Pilih Mata Pelajaran" page
   const availableSubjects = useMemo(() => {
@@ -371,6 +360,31 @@ export const SyllabusView: React.FC<SyllabusViewProps> = ({
       pacingData.projection[pacingData.projection.length - 1]
     );
   }, [pacingData, todayStr]);
+
+  // Auto-scroll to today or highlighted date once journal view renders
+  const scrollTargetDate = useMemo(() => {
+    if (activeHighlightDate) return activeHighlightDate;
+    if (pacingData?.projection.some((p) => p.session.date === todayStr)) return todayStr;
+    return currentSessionItem?.session.date ?? null;
+  }, [activeHighlightDate, pacingData, todayStr, currentSessionItem]);
+
+  useEffect(() => {
+    if (!selectedSubjectId || !selectedClassId || !scrollTargetDate) return;
+
+    let tries = 0;
+    let frame = 0;
+    const tryScroll = () => {
+      const el = document.querySelector<HTMLElement>(`[data-session-date="${scrollTargetDate}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+      if (++tries < 30) frame = requestAnimationFrame(tryScroll);
+    };
+
+      frame = requestAnimationFrame(tryScroll);
+      return () => cancelAnimationFrame(frame);
+  }, [selectedSubjectId, selectedClassId, scrollTargetDate]);
 
   return (
     <div className="space-y-6">
