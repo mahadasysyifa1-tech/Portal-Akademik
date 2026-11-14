@@ -11,15 +11,13 @@ import {
   Flame,
   Video,
   Book,
-  TrendingUp,
-  TrendingDown,
-  Check,
   Newspaper,
   Bell
 } from 'lucide-react';
 import { DatabaseState, SyllabusUnit, DayOfWeek, ScheduledSessionOccurrence, AttendanceSummaryItem } from '../types';
 import { TeacherCard } from './directory/TeachersDirectory';
 import { StudentCard } from './directory/StudentsDirectory';
+import { PacingStatusBadge } from './syllabus/PacingStatusBadge';
 import { AttendanceHistoryModal } from './directory/AttendanceHistoryModal';
 import { ClassIcon } from './ClassIcon';
 import {
@@ -67,6 +65,7 @@ interface HomeTabProps {
   isAdmin?: boolean;
   pendingStore?: AttendancePendingStore;
   onUpdateDb?: (updater: (prev: DatabaseState) => DatabaseState) => void;
+  onEditDisplayCode?: (personType: 'teacher' | 'student', personId: string, nextDisplayCode: string) => void;
 }
 
 export const HomeTab: React.FC<HomeTabProps> = ({
@@ -84,7 +83,8 @@ export const HomeTab: React.FC<HomeTabProps> = ({
   onNavigateToAttendance,
   isAdmin = false,
   pendingStore,
-  onUpdateDb
+  onUpdateDb,
+  onEditDisplayCode
 }) => {
   const auth = useAuth();
   const effectiveIsAdmin = isAdmin || auth.isAdmin;
@@ -290,41 +290,12 @@ export const HomeTab: React.FC<HomeTabProps> = ({
     return `${diffDays} hari lagi`;
   };
 
-  // Helper for computing pacing badge
+  // Helper for computing pacing badge (delegates UI to shared PacingStatusBadge)
   const renderPacingBadge = (subjectId?: string, classId?: string) => {
     if (!subjectId || !classId) return null;
     const status = computePacingStatus(db, subjectId, classId);
     if (!status) return null;
-
-    return (
-      <div className="inline-flex items-center gap-1">
-        {status.diff > 0 ? (
-          <span
-            className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-300 shadow-2xs"
-            title={`Tercatat hal. ${status.actualPage} vs target hal. ${status.targetPage} pada Sesi #${status.meetingIndex}`}
-          >
-            <TrendingUp className="w-3 h-3 text-emerald-600" />
-            <span>lebih {status.diff} Hal</span>
-          </span>
-        ) : status.diff < 0 ? (
-          <span
-            className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-lg border border-rose-200 shadow-2xs"
-            title={`Tercatat hal. ${status.actualPage} vs target hal. ${status.targetPage} pada Sesi #${status.meetingIndex}`}
-          >
-            <TrendingDown className="w-3 h-3 text-rose-600" />
-            <span>telat {status.diff * -1} Hal</span>
-          </span>
-        ) : (
-          <span
-            className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded-lg border border-slate-300 shadow-2xs"
-            title={`Tercatat tepat pada target hal. ${status.targetPage} pada Sesi #${status.meetingIndex}`}
-          >
-            <Check className="w-3 h-3 text-emerald-600" />
-            <span>Sesuai Target</span>
-          </span>
-        )}
-      </div>
-    );
+    return <PacingStatusBadge status={status} variant="compact" />;
   };
 
   // Remaining time logic for single view
@@ -1089,6 +1060,10 @@ export const HomeTab: React.FC<HomeTabProps> = ({
               stats={teacherStats}
               taughtSubjects={taughtSubjects}
               summary={summaryMap[myTeacher.id]}
+              canEditDisplayCode={Boolean(
+                onEditDisplayCode && (effectiveIsAdmin || (auth.isTeacher && auth.teacherId === myTeacher.id))
+              )}
+              onEditDisplayCode={(id, next) => onEditDisplayCode?.('teacher', id, next)}
               onOpenHistory={(teacher) => {
                 setActiveHistoryModal({
                   personType: 'teacher',
@@ -1117,6 +1092,10 @@ export const HomeTab: React.FC<HomeTabProps> = ({
               student={myStudent}
               enrolledClasses={studentEnrolledClasses}
               summary={summaryMap[myStudent.id]}
+              canEditDisplayCode={Boolean(
+                onEditDisplayCode && (effectiveIsAdmin || (auth.isStudent && auth.studentId === myStudent.id))
+              )}
+              onEditDisplayCode={(id, next) => onEditDisplayCode?.('student', id, next)}
               onOpenHistory={(student) => {
                 setActiveHistoryModal({
                   personType: 'student',

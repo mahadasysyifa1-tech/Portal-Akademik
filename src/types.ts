@@ -557,6 +557,7 @@ export interface AttendanceHistoryEntry {
   className: string;
   classColor?: string;
   subjectName: string;
+  subjectCode?: string;
   subjectColor?: string;
   teacherName?: string;
   roomName?: string;

@@ -929,9 +929,9 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </div>
           
-          {/* Right Status & Actions: Accessible to Admin (schedule/rules) and Teachers (attendance drafts) */}
+          {/* Right Status & Actions: Accessible whenever a draft exists (edits are gated at their origin) */}
           <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
-            {(effectiveIsAdmin || auth.isTeacher) && (
+            {(isDirty || isSaving) && (
               <button
                 type="button"
                 id="header-save-btn"

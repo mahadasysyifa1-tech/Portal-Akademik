@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   X,
   Calendar,
@@ -7,6 +7,8 @@ import {
   GraduationCap,
   Users,
   Loader2,
+  BookOpen,
+  Check,
 } from 'lucide-react';
 import type { AttendanceStatus, AttendanceSummaryItem, AttendanceHistoryEntry } from '../../types';
 
@@ -79,6 +81,14 @@ export const AttendanceHistoryModal: React.FC<AttendanceHistoryModalProps> = ({
   const [history, setHistory] = useState<AttendanceHistoryEntry[]>([]);
   const [selectedMonth, setSelectedMonth] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [selectedSubject, setSelectedSubject] = useState<string>('all');
+  const [isSubjectMenuOpen, setIsSubjectMenuOpen] = useState<boolean>(false);
+  const subjectMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setSelectedSubject('all');
+    setIsSubjectMenuOpen(false);
+  }, [personId, isOpen]);
 
   useEffect(() => {
     if (!isOpen || !personId) return;
@@ -114,16 +124,31 @@ export const AttendanceHistoryModal: React.FC<AttendanceHistoryModalProps> = ({
     };
   }, [isOpen, personType, personId, selectedMonth]);
 
-  // Handle escape key
+  // Handle escape key & outside clicks for subject dropdown
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isOpen) {
-        onClose();
+        if (isSubjectMenuOpen) {
+          setIsSubjectMenuOpen(false);
+        } else {
+          onClose();
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen, isSubjectMenuOpen, onClose]);
+
+  useEffect(() => {
+    if (!isSubjectMenuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (subjectMenuRef.current && !subjectMenuRef.current.contains(e.target as Node)) {
+        setIsSubjectMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isSubjectMenuOpen]);
 
   // Extract distinct available months from history for dynamic filter
   const availableMonths = useMemo(() => {
@@ -147,40 +172,90 @@ export const AttendanceHistoryModal: React.FC<AttendanceHistoryModalProps> = ({
     return Array.from(set).sort().reverse();
   }, [history]);
 
-  // Filter history by status filter inside modal
+  const getSubjectShortCode = (name: string, code?: string) => {
+    const cleanCode = code?.trim();
+    if (cleanCode) return cleanCode.toUpperCase().slice(0, 4);
+    const words = name.trim().split(/\s+/).filter(Boolean);
+    if (words.length >= 2) {
+      return (words[0][0] + words[1][0]).toUpperCase();
+    }
+    return name.trim().slice(0, 2).toUpperCase() || 'MP';
+  };
+
+  // Distinct subjects found in loaded attendance history
+  const availableSubjects = useMemo(() => {
+    const map = new Map<string, { color?: string; code: string }>();
+    history.forEach((h) => {
+      if (h.subjectName) {
+        const existing = map.get(h.subjectName);
+        if (!existing) {
+          map.set(h.subjectName, {
+            color: h.subjectColor,
+            code: getSubjectShortCode(h.subjectName, h.subjectCode),
+          });
+        } else if (!existing.color && h.subjectColor) {
+          existing.color = h.subjectColor;
+        }
+      }
+    });
+    if (selectedSubject !== 'all' && !map.has(selectedSubject)) {
+      map.set(selectedSubject, {
+        color: undefined,
+        code: getSubjectShortCode(selectedSubject),
+      });
+    }
+    return Array.from(map.entries())
+      .map(([name, info]) => ({ name, color: info.color, code: info.code }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [history, selectedSubject]);
+
+  const selectedSubjectMeta = useMemo(
+    () => availableSubjects.find((s) => s.name === selectedSubject),
+    [availableSubjects, selectedSubject]
+  );
+
+  const subjectFilteredHistory = useMemo(() => {
+    if (selectedSubject === 'all') return history;
+    return history.filter((h) => h.subjectName === selectedSubject);
+  }, [history, selectedSubject]);
+
+  // Filter history by status filter inside modal (on top of subject & month filters)
   const filteredHistory = useMemo(() => {
-    return history.filter((h) => {
+    return subjectFilteredHistory.filter((h) => {
       if (statusFilter !== 'all' && h.status !== statusFilter) {
         return false;
       }
       return true;
     });
-  }, [history, statusFilter]);
+  }, [subjectFilteredHistory, statusFilter]);
 
-  // Recalculate stats for current filtered list
+  // Recalculate stats for current subject-filtered list
   const currentStats = useMemo(() => {
-    const total = history.length;
-    const hadir = history.filter((h) => h.status === 'Hadir').length;
-    const terlambat = history.filter((h) => h.status === 'Terlambat').length;
-    const izin = history.filter((h) => h.status === 'Izin').length;
-    const sakit = history.filter((h) => h.status === 'Sakit').length;
-    const alpa = history.filter((h) => h.status === 'Alpa').length;
+    const total = subjectFilteredHistory.length;
+    const hadir = subjectFilteredHistory.filter((h) => h.status === 'Hadir').length;
+    const terlambat = subjectFilteredHistory.filter((h) => h.status === 'Terlambat').length;
+    const izin = subjectFilteredHistory.filter((h) => h.status === 'Izin').length;
+    const sakit = subjectFilteredHistory.filter((h) => h.status === 'Sakit').length;
+    const alpa = subjectFilteredHistory.filter((h) => h.status === 'Alpa').length;
     const present = hadir + terlambat;
     const rate = total > 0 ? Math.round((present / total) * 100) : 0;
 
     return { total, hadir, terlambat, izin, sakit, alpa, present, rate };
-  }, [history]);
+  }, [subjectFilteredHistory]);
 
-  const displayStats = selectedMonth === 'all' && initialSummary ? {
-    total: initialSummary.total,
-    hadir: initialSummary.hadir,
-    terlambat: initialSummary.terlambat,
-    izin: initialSummary.izin,
-    sakit: initialSummary.sakit,
-    alpa: initialSummary.alpa,
-    present: initialSummary.hadir + initialSummary.terlambat,
-    rate: initialSummary.rate,
-  } : currentStats;
+  const displayStats =
+    selectedMonth === 'all' && selectedSubject === 'all' && initialSummary
+      ? {
+          total: initialSummary.total,
+          hadir: initialSummary.hadir,
+          terlambat: initialSummary.terlambat,
+          izin: initialSummary.izin,
+          sakit: initialSummary.sakit,
+          alpa: initialSummary.alpa,
+          present: initialSummary.hadir + initialSummary.terlambat,
+          rate: initialSummary.rate,
+        }
+      : currentStats;
 
   if (!isOpen) return null;
 
@@ -252,9 +327,106 @@ export const AttendanceHistoryModal: React.FC<AttendanceHistoryModalProps> = ({
           </button>
         </div>
 
-        {/* Presence Summary: big rate + bar + count */}
+        {/* Presence Summary: square subject tile + big rate + bar + count */}
         <div className="px-4 sm:px-6 py-3 bg-white border-b border-slate-100">
           <div className="flex items-center gap-3">
+            {/* Clickable Square Subject Block */}
+            <div ref={subjectMenuRef} className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsSubjectMenuOpen((prev) => !prev)}
+                style={
+                  selectedSubject !== 'all'
+                    ? { backgroundColor: selectedSubjectMeta?.color || '#4F46E5' }
+                    : undefined
+                }
+                className={`w-12 h-12 sm:w-14 sm:h-14 rounded-xl flex flex-col items-center justify-center px-1 transition-all cursor-pointer select-none ${
+                  selectedSubject !== 'all'
+                    ? 'border border-black/15 shadow-xs text-white hover:brightness-95'
+                    : 'bg-slate-100 border border-slate-200 text-slate-700 hover:bg-slate-200/80'
+                }`}
+                title={
+                  selectedSubject === 'all'
+                    ? 'Semua Mata Pelajaran — klik untuk memfilter per mapel'
+                    : `${selectedSubject} — klik untuk mengganti mata pelajaran`
+                }
+              >
+                {selectedSubject === 'all' ? (
+                  <>
+                    <BookOpen className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-slate-600 shrink-0" />
+                    <span className="text-[9px] font-semibold text-slate-600 leading-tight mt-0.5 truncate max-w-[44px] sm:max-w-[50px]">
+                      Semua
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-sm sm:text-base font-black leading-none tracking-tight text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.25)]">
+                      {selectedSubjectMeta?.code || getSubjectShortCode(selectedSubject)}
+                    </span>
+                    <span className="text-[8px] sm:text-[9px] font-medium text-white/95 leading-tight mt-0.5 truncate max-w-[44px] sm:max-w-[52px] drop-shadow-[0_1px_1px_rgba(0,0,0,0.2)]">
+                      {selectedSubject}
+                    </span>
+                  </>
+                )}
+              </button>
+
+              {isSubjectMenuOpen && (
+                <div className="absolute left-0 top-full mt-1.5 z-30 min-w-[200px] max-w-[270px] max-h-60 overflow-y-auto bg-white rounded-xl border border-slate-200 shadow-xl py-1 animate-in fade-in zoom-in-95 duration-100">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedSubject('all');
+                      setIsSubjectMenuOpen(false);
+                    }}
+                    className={`w-full px-3 py-1.5 text-left text-xs flex items-center justify-between gap-2 transition-colors cursor-pointer ${
+                      selectedSubject === 'all'
+                        ? 'bg-indigo-50 text-indigo-700 font-bold'
+                        : 'text-slate-700 hover:bg-slate-50 font-medium'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2 min-w-0">
+                      <BookOpen className="w-3.5 h-3.5 shrink-0 text-slate-400" />
+                      <span className="truncate">Semua Mapel</span>
+                    </span>
+                    {selectedSubject === 'all' && <Check className="w-3.5 h-3.5 shrink-0 text-indigo-600" />}
+                  </button>
+
+                  {availableSubjects.length > 0 && <div className="my-1 border-t border-slate-100" />}
+
+                  {availableSubjects.map((subj) => {
+                    const isSelected = selectedSubject === subj.name;
+                    return (
+                      <button
+                        key={subj.name}
+                        type="button"
+                        onClick={() => {
+                          setSelectedSubject(subj.name);
+                          setIsSubjectMenuOpen(false);
+                        }}
+                        className={`w-full px-3 py-1.5 text-left text-xs flex items-center justify-between gap-2 transition-colors cursor-pointer ${
+                          isSelected
+                            ? 'bg-indigo-50 text-indigo-700 font-bold'
+                            : 'text-slate-700 hover:bg-slate-50 font-medium'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2 min-w-0">
+                          <span
+                            className="w-2 h-2 rounded-full shrink-0"
+                            style={{ backgroundColor: subj.color || '#64748B' }}
+                          />
+                          <span className="font-mono text-[10px] font-bold text-slate-400 shrink-0">
+                            {subj.code}
+                          </span>
+                          <span className="truncate">{subj.name}</span>
+                        </span>
+                        {isSelected && <Check className="w-3.5 h-3.5 shrink-0 text-indigo-600" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
             <div className={`text-4xl sm:text-5xl font-black leading-none tabular-nums shrink-0 ${rateColor}`}>
               {displayStats.rate}%
             </div>

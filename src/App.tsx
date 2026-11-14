@@ -81,8 +81,12 @@ export default function App() {
   const [databaseSubTab, setDatabaseSubTab] = useState<DatabaseSubTab>('classes');
   const [isSaving, setIsSaving] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
+  const [displayCodeDrafts, setDisplayCodeDrafts] = useState<
+    Record<string, { personType: 'teacher' | 'student'; personId: string; displayCode: string }>
+  >({});
+  const hasDisplayCodeDrafts = Object.keys(displayCodeDrafts).length > 0;
   const attendancePendingStore = useAttendancePendingStore();
-  const combinedIsDirty = isDirty || attendancePendingStore.isDirty;
+  const combinedIsDirty = isDirty || attendancePendingStore.isDirty || hasDisplayCodeDrafts;
 
   const draftItems = useMemo(() => {
     const items: string[] = [];
@@ -91,11 +95,15 @@ export default function App() {
     } else if (attendancePendingStore.isDirty) {
       items.push('presensi');
     }
+    const codeCount = Object.keys(displayCodeDrafts).length;
+    if (codeCount > 0) {
+      items.push(`kode tampilan (${codeCount})`);
+    }
     if (isDirty) {
       items.push('jadwal/database');
     }
     return items;
-  }, [attendancePendingStore.pendingCount, attendancePendingStore.isDirty, isDirty]);
+  }, [attendancePendingStore.pendingCount, attendancePendingStore.isDirty, displayCodeDrafts, isDirty]);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>({ kind: 'idle' });
   const [cloudLoad, setCloudLoad] = useState<'loading' | 'ok' | 'failed'>('loading');
   const editVersion = useRef(0);
@@ -395,6 +403,52 @@ export default function App() {
     window.addEventListener('attendance:saved', handleAttendanceSaved);
     return () => window.removeEventListener('attendance:saved', handleAttendanceSaved);
   }, []);
+
+  // Keep teachers / students email in sync immediately when admin approves a role request
+  useEffect(() => {
+    const handleRoleApproved = (e: Event) => {
+      const detail = (e as CustomEvent<{ role?: 'teacher' | 'student'; personId?: string; email?: string }>).detail;
+      if (detail?.personId && detail?.email) {
+        setDb((prev) => {
+          const nextTeachers =
+            detail.role === 'teacher'
+              ? (prev.teachers || []).map((t) =>
+                  t.id === detail.personId ? { ...t, email: detail.email! } : t
+                )
+              : prev.teachers;
+          const nextStudents =
+            detail.role === 'student'
+              ? (prev.students || []).map((s) =>
+                  s.id === detail.personId ? { ...s, email: detail.email! } : s
+                )
+              : prev.students;
+          const nextDb = { ...prev, teachers: nextTeachers, students: nextStudents };
+          try {
+            localStorage.setItem('school_schedule_db', JSON.stringify(nextDb));
+          } catch {}
+          return nextDb;
+        });
+      }
+
+      if (!isDirty && !hasDisplayCodeDrafts) {
+        fetch('/api/database')
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data: any) => {
+            if (data && data.subjects && data.subjects.length > 0) {
+              const normalized = normalizeDatabaseState(data);
+              setDb(normalized);
+              try {
+                localStorage.setItem('school_schedule_db', JSON.stringify(normalized));
+              } catch {}
+            }
+          })
+          .catch((err) => console.warn('Failed to refresh database after role approval', err));
+      }
+    };
+
+    window.addEventListener('role-request:approved', handleRoleApproved);
+    return () => window.removeEventListener('role-request:approved', handleRoleApproved);
+  }, [isDirty, hasDisplayCodeDrafts]);
   useEffect(() => {
     if (viewerRole === 'student') {
       const valid = db.classes.some((c) => c.id === viewerId);
@@ -457,10 +511,51 @@ export default function App() {
     });
   }, []);
 
+  const handleStageDisplayCodeDraft = useCallback(
+    (personType: 'teacher' | 'student', personId: string, nextDisplayCode: string) => {
+      const isAllowed =
+        effectiveIsAdmin ||
+        (personType === 'teacher' && auth.isTeacher && auth.teacherId === personId) ||
+        (personType === 'student' && auth.isStudent && auth.studentId === personId);
+      if (!isAllowed || !personId) return;
+
+      const trimmed = String(nextDisplayCode ?? '').trim();
+      const key = `${personType}:${personId}`;
+
+      setDisplayCodeDrafts((prev) => ({
+        ...prev,
+        [key]: { personType, personId, displayCode: trimmed },
+      }));
+
+      setDb((prev) => {
+        const nextTeachers =
+          personType === 'teacher'
+            ? (prev.teachers || []).map((t) =>
+                t.id === personId ? { ...t, displayCode: trimmed, display_code: trimmed } : t
+              )
+            : prev.teachers;
+        const nextStudents =
+          personType === 'student'
+            ? (prev.students || []).map((s) =>
+                s.id === personId ? { ...s, displayCode: trimmed, display_code: trimmed } : s
+              )
+            : prev.students;
+        const nextDb = { ...prev, teachers: nextTeachers, students: nextStudents };
+        try {
+          localStorage.setItem('school_schedule_db', JSON.stringify(nextDb));
+        } catch {}
+        return nextDb;
+      });
+      setSaveStatus({ kind: 'idle' });
+    },
+    [effectiveIsAdmin, auth.isTeacher, auth.teacherId, auth.isStudent, auth.studentId]
+  );
+
   // Global discard drafts handler
   const handleDiscardAllDrafts = useCallback(() => {
-    // 1. Clear attendance pending drafts
+    // 1. Clear attendance pending drafts and card displayCode drafts
     attendancePendingStore.clearDrafts();
+    setDisplayCodeDrafts({});
 
     // 2. Clear database dirty flag and reload clean state from Turso
     setIsDirty(false);
@@ -501,8 +596,8 @@ export default function App() {
   });
 
   const handleSaveToCloud = async () => {
-    // Both admin and teachers with pending attendance drafts can save
-    if (!effectiveIsAdmin && !attendancePendingStore.isDirty) {
+    // Admin (database), Teachers (attendance/displayCode), or Students (own displayCode) with drafts can save
+    if (!effectiveIsAdmin && !attendancePendingStore.isDirty && !hasDisplayCodeDrafts) {
       return;
     }
 
@@ -522,7 +617,7 @@ export default function App() {
       let actualCounts: Record<string, number> | undefined;
       let savedTimestamp = new Date().toISOString();
 
-      if (isDirty) {
+      if (effectiveIsAdmin && isDirty) {
         const res = await fetch('/api/database/save', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -546,6 +641,22 @@ export default function App() {
         actualCounts = actual;
         savedTimestamp = body.savedAt || savedTimestamp;
         setIsDirty(false);
+        setDisplayCodeDrafts({});
+        window.dispatchEvent(new Event('database:saved'));
+      } else if (hasDisplayCodeDrafts) {
+        const res = await fetch('/api/directory/display-code', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            actorUid: auth.profile?.uid,
+            updates: Object.values(displayCodeDrafts),
+          }),
+        });
+        const body: any = await res.json().catch(() => ({}));
+        if (!res.ok || !body.success) {
+          throw new Error(body?.details || body?.error || `HTTP ${res.status}`);
+        }
+        setDisplayCodeDrafts({});
         window.dispatchEvent(new Event('database:saved'));
       }
 
@@ -839,6 +950,7 @@ export default function App() {
             isAdmin={effectiveIsAdmin}
             pendingStore={attendancePendingStore}
             onUpdateDb={saveDatabase}
+            onEditDisplayCode={handleStageDisplayCodeDraft}
           />
         )}
 
@@ -988,6 +1100,7 @@ export default function App() {
           <TeachersDirectory
             db={db}
             onBackToSchedule={() => handleTabChange('studio')}
+            onEditTeacherDisplayCode={(id, next) => handleStageDisplayCodeDraft('teacher', id, next)}
             onSelectTeacherSchedule={(teacherId) => {
               setStudioViewMode(ScheduleViewMode.TEACHER_WEEK);
               setStudioSelectedTeacherId(teacherId);
@@ -1007,6 +1120,7 @@ export default function App() {
           <StudentsDirectory
             db={db}
             onBackToSchedule={() => handleTabChange('studio')}
+            onEditStudentDisplayCode={(id, next) => handleStageDisplayCodeDraft('student', id, next)}
             onSelectStudentSchedule={(classId) => {
               setStudioViewMode(ScheduleViewMode.STUDENT_WEEK);
               setStudioSelectedClassId(classId);

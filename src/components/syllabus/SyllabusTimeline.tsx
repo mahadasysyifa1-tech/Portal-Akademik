@@ -12,9 +12,6 @@ import {
   FileText,
   Ban,
   SlidersHorizontal,
-  TrendingUp,
-  TrendingDown,
-  Check,
   ClipboardCheck
 } from 'lucide-react';
 import type {
@@ -25,7 +22,8 @@ import type {
   SyllabusScope,
   ScheduledSessionOccurrence
 } from '../../types';
-import { formatUnitDisplay } from '../../utils/pacingEngine';
+import { formatUnitDisplay, computePacingStatus } from '../../utils/pacingEngine';
+import { PacingStatusBadge } from './PacingStatusBadge';
 
 export interface SyllabusTimelineProps {
   currentSubject?: Subject;
@@ -109,71 +107,23 @@ export const SyllabusTimeline: React.FC<SyllabusTimelineProps> = ({
     ? 0
     : effectivePacingData?.projection.filter((p) => p.session.isCancelled).length || 0;
 
-  // Calculate Pacing Progress (Behind vs Ahead vs On Track) based on page difference (only in adjusted mode)
+  // Calculate Pacing Progress (Behind vs Ahead vs On Track) via shared engine helper (only in adjusted mode)
   const pacingStatus = useMemo(() => {
-    if (isTargetMode || !effectivePacingData?.projection || effectivePacingData.projection.length === 0) return null;
-
-    // Find latest meeting that has actual progress recorded
-    const recordedSessions = effectivePacingData.projection.filter(
-      (p) => !p.session.isCancelled && typeof p.session.actual_page === 'number' && p.session.actual_page > 0
-    );
-    if (recordedSessions.length === 0) return null;
-
-    const latest = recordedSessions[recordedSessions.length - 1];
-    const actualPage = latest.session.actual_page!;
-    const actualMateriId = latest.session.actual_materi_id;
-    const scopedUnits = effectivePacingData.scopedUnits || [];
-
-    // Helper to calculate cumulative pages across scoped units (handles cut materials, multiple books, and page offsets)
-    const getCumulativePage = (unitId: string | undefined, pageNum: number): number => {
-      if (scopedUnits.length === 0) return pageNum;
-
-      let uIdx = unitId ? scopedUnits.findIndex((u) => u.id === unitId) : -1;
-      if (uIdx === -1) {
-        uIdx = scopedUnits.findIndex((u) => {
-          const s = typeof u.page_start === 'number' ? u.page_start : parseInt(String(u.page_start), 10);
-          const e = typeof u.page_end === 'number' ? u.page_end : parseInt(String(u.page_end), 10);
-          return !isNaN(s) && !isNaN(e) && pageNum >= Math.min(s, e) && pageNum <= Math.max(s, e);
-        });
+    if (isTargetMode || !effectivePacingData?.projection || effectivePacingData.projection.length === 0) {
+      return null;
+    }
+    return computePacingStatus(
+      undefined,
+      currentSubject?.id || '',
+      currentClass?.id || '',
+      {
+        adjustedProjection: effectivePacingData.projection as any,
+        targetProjection: targetPacingData?.projection as any,
+        scopedUnits: effectivePacingData.scopedUnits,
+        pagesPerSession: Number(effectivePacingData.pagesPerSession || 1),
       }
-      if (uIdx === -1) uIdx = 0;
-
-      let cum = 0;
-      for (let i = 0; i < uIdx; i++) {
-        const s = typeof scopedUnits[i].page_start === 'number' ? scopedUnits[i].page_start : parseInt(String(scopedUnits[i].page_start), 10);
-        const e = typeof scopedUnits[i].page_end === 'number' ? scopedUnits[i].page_end : parseInt(String(scopedUnits[i].page_end), 10);
-        const span = !isNaN(s) && !isNaN(e) && e >= s ? e - s + 1 : 1;
-        cum += span;
-      }
-
-      const currentUnit = scopedUnits[uIdx];
-      const uStart = typeof currentUnit?.page_start === 'number' ? currentUnit.page_start : parseInt(String(currentUnit?.page_start || 1), 10);
-      cum += Math.max(0, pageNum - uStart + 1);
-      return cum;
-    };
-
-    // Look up the pure baseline target session from targetPacingData
-    const baselineSession = targetPacingData?.projection.find(
-      (p) => p.session.id === latest.session.id || p.session.date === latest.session.date
     );
-    const baselineUnits = baselineSession?.units || [];
-    const targetUnit = baselineUnits[baselineUnits.length - 1] || scopedUnits[0];
-    const targetPage = targetUnit?.page_end ?? targetUnit?.page_start ?? 0;
-    const targetUnitId = targetUnit?.id;
-
-    const actualCum = getCumulativePage(actualMateriId, actualPage);
-    const targetCum = baselineUnits.length > 0
-      ? getCumulativePage(targetUnitId, targetPage)
-      : Math.round(Number(effectivePacingData.pagesPerSession || 1) * latest.session.meetingIndex);
-    const diff = actualCum - targetCum;
-
-    return {
-      meetingIndex: latest.session.meetingIndex,
-      diff,
-      actualPage,
-      targetPage: baselineUnits.length > 0 ? targetPage : targetCum
-    };
-  }, [effectivePacingData, targetPacingData, isTargetMode]);
+  }, [effectivePacingData, targetPacingData, isTargetMode, currentSubject?.id, currentClass?.id]);
 
   const latestMeetingWithNotes = effectivePacingData?.projection
     ?.slice()
@@ -309,36 +259,10 @@ export const SyllabusTimeline: React.FC<SyllabusTimelineProps> = ({
               </span>
               {/* Pacing status indicator */}
               {pacingStatus ? (
-                <div className="flex items-center gap-1.5">
-                {pacingStatus.diff > 0 ? (
-                  <span
-                  className="inline-flex items-center gap-1 text-emerald-800"
-                  title={`Tercatat hal. ${pacingStatus.actualPage} vs target hal. ${pacingStatus.targetPage} pada Sesi #${displayNumber(pacingStatus.meetingIndex)}`}
-                  >
-                  <TrendingUp className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>lebih {pacingStatus.diff} Hal</span>
-                  </span>
-                ) : pacingStatus.diff < 0 ? (
-                  <span
-                  className="inline-flex items-center gap-1 text-xs font-bold text-rose-600 "
-                  title={`Tercatat hal. ${pacingStatus.actualPage} vs target hal. ${pacingStatus.targetPage} pada Sesi #${displayNumber(pacingStatus.meetingIndex)}`}
-                  >
-                  <TrendingDown className="w-3.5 h-3.5 text-rose-600" />
-                  <span>telat {pacingStatus.diff*-1} Hal</span>
-                  </span>
-                ) : (
-                  <span
-                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold rounded-lg bg-slate-100 text-slate-800 border border-slate-300"
-                  title={`Tercatat tepat pada target hal. ${pacingStatus.targetPage} pada Sesi #${displayNumber(pacingStatus.meetingIndex)}`}
-                  >
-                  <Check className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Sesuai Target</span>
-                  </span>
-                )}
-                </div>
+                <PacingStatusBadge status={pacingStatus} formatNumber={displayNumber} variant="detailed" />
               ) : (
                 <div className="flex items-center gap-1.5 text-slate-400 italic text-xs">
-                <span>Laju Kurikulum: Belum ada progres sesi tercatat</span>
+                  <span>Laju Kurikulum: Belum ada progres sesi tercatat</span>
                 </div>
               )}
               {pacingStatus && (

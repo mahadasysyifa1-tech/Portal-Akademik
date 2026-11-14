@@ -1,13 +1,17 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { DatabaseState, StudentRecord, AttendanceSummaryItem } from '../../types';
-import { Search, GraduationCap, Phone, Hash, Layers } from 'lucide-react';
+import { Search, GraduationCap, Phone, Hash, Layers, Mail } from 'lucide-react';
 import { ClassIcon } from '../ClassIcon';
 import { AttendanceHistoryModal } from './AttendanceHistoryModal';
+import { DisplayCodeBadge } from './DisplayCodeBadge';
+import { useAuth } from '../../context/AuthContext';
 
 export interface StudentCardProps {
   student: StudentRecord;
   enrolledClasses?: any[];
   summary?: AttendanceSummaryItem;
+  canEditDisplayCode?: boolean;
+  onEditDisplayCode?: (studentId: string, nextDisplayCode: string) => void;
   onOpenHistory?: (student: StudentRecord) => void;
   onSelectSchedule?: (classId: string, studentId: string) => void;
 }
@@ -16,6 +20,8 @@ export const StudentCard: React.FC<StudentCardProps> = ({
   student,
   enrolledClasses = [],
   summary,
+  canEditDisplayCode = false,
+  onEditDisplayCode,
   onOpenHistory,
   onSelectSchedule
 }) => {
@@ -43,6 +49,11 @@ export const StudentCard: React.FC<StudentCardProps> = ({
                   {student.gender === 'P' ? 'Akhwat (P)' : 'Ikhwan (L)'}
                 </span>
               )}
+              <DisplayCodeBadge
+                value={student.displayCode ?? student.display_code ?? ''}
+                canEdit={canEditDisplayCode}
+                onStageChange={(next) => onEditDisplayCode?.(student.id, next)}
+              />
             </div>
             <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5">
               <span className="flex items-center gap-1 font-mono">
@@ -54,6 +65,12 @@ export const StudentCard: React.FC<StudentCardProps> = ({
         </div>
 
         {/* Contact info if any */}
+        {student.email && (
+          <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-1.5">
+            <Mail className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+            <span className="truncate">{student.email}</span>
+          </div>
+        )}
         {student.phone && (
           <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-2.5 font-mono">
             <Phone className="w-3 h-3 text-slate-400 shrink-0" />
@@ -162,12 +179,15 @@ interface StudentsDirectoryProps {
   db: DatabaseState;
   onBackToSchedule: () => void;
   onSelectStudentSchedule: (classId: string, studentId?: string) => void;
+  onEditStudentDisplayCode?: (studentId: string, nextDisplayCode: string) => void;
 }
 
 export const StudentsDirectory: React.FC<StudentsDirectoryProps> = ({
   db,
-  onSelectStudentSchedule
+  onSelectStudentSchedule,
+  onEditStudentDisplayCode
 }) => {
+  const auth = useAuth();
   const [search, setSearch] = useState('');
   const [selectedClassFilter, setSelectedClassFilter] = useState<string>('all');
   const [genderFilter, setGenderFilter] = useState<'all' | 'L' | 'P'>('all');
@@ -221,7 +241,9 @@ export const StudentsDirectory: React.FC<StudentsDirectoryProps> = ({
       const matchSearch =
         !q ||
         s.name.toLowerCase().includes(q) ||
+        (s.displayCode && s.displayCode.toLowerCase().includes(q)) ||
         (s.nisn && s.nisn.toLowerCase().includes(q)) ||
+        (s.email && s.email.toLowerCase().includes(q)) ||
         (s.phone && s.phone.toLowerCase().includes(q));
 
       if (!matchSearch) return false;
@@ -354,6 +376,10 @@ export const StudentsDirectory: React.FC<StudentsDirectoryProps> = ({
                 student={student}
                 enrolledClasses={enrolledClasses}
                 summary={summaryMap[student.id]}
+                canEditDisplayCode={Boolean(
+                  onEditStudentDisplayCode && (auth.isAdmin || (auth.isStudent && auth.studentId === student.id))
+                )}
+                onEditDisplayCode={onEditStudentDisplayCode}
                 onOpenHistory={setActiveStudentForHistory}
                 onSelectSchedule={(classId, studentId) => onSelectStudentSchedule(classId, studentId)}
               />
