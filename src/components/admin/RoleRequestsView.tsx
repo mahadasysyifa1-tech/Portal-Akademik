@@ -13,7 +13,6 @@ import {
   AlertCircle,
   X,
 } from 'lucide-react';
-import { syncAcademicMemberToFirestore } from '../../utils/directoryMedia';
 
 export interface RoleRequestItem {
   uid: string;
@@ -105,15 +104,12 @@ export const RoleRequestsView: React.FC<RoleRequestsViewProps> = ({ onRefreshCou
         throw new Error(data.error || 'Gagal menyetujui pengajuan.');
       }
       setSuccessMessage(data.message || `Berhasil menyetujui akun ${item.email}.`);
-      const approvedRole = (data.role || item.requestedRole) as 'teacher' | 'student' | 'admin';
-      const approvedEmail = data.email || item.email;
-      syncAcademicMemberToFirestore(item.uid, approvedRole, approvedEmail).catch(() => {});
       window.dispatchEvent(
         new CustomEvent('role-request:approved', {
           detail: {
-            role: approvedRole,
+            role: data.role || item.requestedRole,
             personId: data.personId || item.requestedPersonId,
-            email: approvedEmail,
+            email: data.email || item.email,
           },
         })
       );

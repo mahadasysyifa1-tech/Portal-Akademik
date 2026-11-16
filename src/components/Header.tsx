@@ -97,7 +97,6 @@ export const Header: React.FC<HeaderProps> = ({
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isLoginMenuOpen, setIsLoginMenuOpen] = useState(false);
   const [isClaimModalOpen, setIsClaimModalOpen] = useState(false);
-  const [hasDismissedClaimModal, setHasDismissedClaimModal] = useState(false);
   const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
   const effectiveIsAdmin = auth.isAdmin;
   const isAcademicVisible = effectiveIsAdmin || auth.isTeacher || auth.isStudent;
@@ -105,17 +104,12 @@ export const Header: React.FC<HeaderProps> = ({
   const prevDraftKey = React.useRef('');
   const currentDraftKey = (draftItems || []).join('|');
 
-  // Auto-open role claim modal when a guest signs in without a pending request
+  // Auto-open role claim modal when a user signs in as a guest with no pending request
   React.useEffect(() => {
-    if (
-      !hasDismissedClaimModal &&
-      auth.isAuthenticated &&
-      auth.role === 'guest' &&
-      auth.profile?.requestStatus !== 'pending'
-    ) {
+    if (auth.isAuthenticated && auth.role === 'guest' && (!auth.profile?.requestStatus || auth.profile?.requestStatus === 'none')) {
       setIsClaimModalOpen(true);
     }
-  }, [hasDismissedClaimModal, auth.isAuthenticated, auth.role, auth.profile?.requestStatus]);
+  }, [auth.isAuthenticated, auth.role, auth.profile?.requestStatus]);
 
   React.useEffect(() => {
     if (!effectiveIsAdmin) return;
@@ -987,10 +981,7 @@ export const Header: React.FC<HeaderProps> = ({
 
       <ClaimRoleModal
         isOpen={isClaimModalOpen}
-        onClose={() => {
-          setIsClaimModalOpen(false);
-          setHasDismissedClaimModal(true);
-        }}
+        onClose={() => setIsClaimModalOpen(false)}
         db={db || ({ teachers: [], students: [] } as any)}
       />
     </header>

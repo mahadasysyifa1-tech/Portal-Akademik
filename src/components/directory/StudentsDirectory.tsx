@@ -6,20 +6,14 @@ import { AttendanceHistoryModal } from './AttendanceHistoryModal';
 import { AttendanceSummaryBar } from './AttendanceSummaryBar';
 import { DirectoryShell } from './DirectoryShell';
 import { DisplayCodeBadge } from './DisplayCodeBadge';
-import { DirectoryPicture } from './DirectoryPicture';
-import { PictureUploadModal } from './PictureUploadModal';
 import { useAuth } from '../../context/AuthContext';
 import { useAttendanceSummary } from '../../hooks/useAttendanceSummary';
-import { DirectoryMediaItem } from '../../utils/directoryMedia';
 import { buildStudentEnrollmentsMap } from '../../utils/directoryRelations';
 
 export interface StudentCardProps {
   student: StudentRecord;
   enrolledClasses?: ClassEntity[];
   summary?: AttendanceSummaryItem;
-  pictureMedia?: DirectoryMediaItem;
-  canEditPicture?: boolean;
-  onEditPicture?: (student: StudentRecord) => void;
   canEditDisplayCode?: boolean;
   onEditDisplayCode?: (studentId: string, nextDisplayCode: string) => void;
   onOpenHistory?: (student: StudentRecord) => void;
@@ -31,9 +25,6 @@ export const StudentCard: React.FC<StudentCardProps> = ({
   student,
   enrolledClasses = [],
   summary,
-  pictureMedia,
-  canEditPicture = false,
-  onEditPicture,
   canEditDisplayCode = false,
   onEditDisplayCode,
   onOpenHistory,
@@ -41,36 +32,12 @@ export const StudentCard: React.FC<StudentCardProps> = ({
   onSelectClass
 }) => {
   const primaryClass = enrolledClasses[0];
-  const initials =
-    student.name
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase() || '')
-      .join('') || 'S';
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs hover:shadow-xs transition-shadow flex flex-col justify-between">
       <div>
-        {/* Header: Portrait, Name & Gender Label */}
-        <div className="flex items-start gap-3 mb-2.5">
-          <DirectoryPicture
-            src={pictureMedia?.imageUrl}
-            alt={student.name}
-            containerClassName="w-12 h-12 rounded-2xl"
-            canEdit={canEditPicture}
-            onEditClick={onEditPicture ? () => onEditPicture(student) : undefined}
-            editLabel={`Ubah foto ${student.name}`}
-            fallback={
-              <div
-                className={`w-full h-full flex items-center justify-center font-bold text-xs text-white select-none ${
-                  student.gender === 'P' ? 'bg-pink-600' : 'bg-indigo-600'
-                }`}
-              >
-                {initials}
-              </div>
-            }
-          />
+        {/* Header: Name & Gender Label */}
+        <div className="flex items-start justify-between gap-2 mb-2">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5 flex-wrap">
               <h3 className="text-sm font-bold text-slate-900 truncate">
@@ -204,15 +171,13 @@ interface StudentsDirectoryProps {
   onSelectStudentSchedule: (classId: string, studentId?: string) => void;
   onSelectClass?: (classId: string) => void;
   onEditStudentDisplayCode?: (studentId: string, nextDisplayCode: string) => void;
-  getMedia?: (entityType: 'student', entityId?: string) => DirectoryMediaItem | undefined;
 }
 
 export const StudentsDirectory: React.FC<StudentsDirectoryProps> = ({
   db,
   onSelectStudentSchedule,
   onSelectClass,
-  onEditStudentDisplayCode,
-  getMedia
+  onEditStudentDisplayCode
 }) => {
   const auth = useAuth();
   const [search, setSearch] = useState('');
@@ -220,7 +185,6 @@ export const StudentsDirectory: React.FC<StudentsDirectoryProps> = ({
   const [genderFilter, setGenderFilter] = useState<'all' | 'L' | 'P'>('all');
   const summaryMap = useAttendanceSummary('student');
   const [activeStudentForHistory, setActiveStudentForHistory] = useState<StudentRecord | null>(null);
-  const [pictureTarget, setPictureTarget] = useState<StudentRecord | null>(null);
 
   const studentEnrollmentsMap = useMemo(() => buildStudentEnrollmentsMap(db), [db]);
 
@@ -352,9 +316,6 @@ export const StudentsDirectory: React.FC<StudentsDirectoryProps> = ({
               student={student}
               enrolledClasses={enrolledClasses}
               summary={summaryMap[student.id]}
-              pictureMedia={getMedia?.('student', student.id)}
-              canEditPicture={Boolean(auth.isAdmin || (auth.isStudent && auth.studentId === student.id))}
-              onEditPicture={setPictureTarget}
               canEditDisplayCode={Boolean(
                 onEditStudentDisplayCode && (auth.isAdmin || (auth.isStudent && auth.studentId === student.id))
               )}
@@ -376,18 +337,6 @@ export const StudentsDirectory: React.FC<StudentsDirectoryProps> = ({
           personName={activeStudentForHistory.name}
           personSubtitle={`NISN: ${activeStudentForHistory.nisn || activeStudentForHistory.id}`}
           initialSummary={summaryMap[activeStudentForHistory.id]}
-        />
-      )}
-
-      {pictureTarget && (
-        <PictureUploadModal
-          isOpen={true}
-          onClose={() => setPictureTarget(null)}
-          entityType="student"
-          entityId={pictureTarget.id}
-          entityName={pictureTarget.name}
-          currentMedia={getMedia?.('student', pictureTarget.id)}
-          aspectHint="square"
         />
       )}
     </>

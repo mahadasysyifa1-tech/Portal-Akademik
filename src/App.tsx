@@ -22,8 +22,6 @@ import { EnrollmentView } from './components/attendance/EnrollmentView';
 import { RuleManagerView } from './components/ruleManager/RuleManagerView';
 import { parseUrlRoute, updateUrlRoute } from './utils/routing';
 import { useAttendancePendingStore } from './utils/useAttendancePendingStore';
-import { useDirectoryMedia } from './hooks/useDirectoryMedia';
-import { OfflineIndicator } from './components/pwa/OfflineIndicator';
 import type { ViewerRole } from './types/viewer';
 import { useAuth } from './context/AuthContext';
 
@@ -83,7 +81,6 @@ export default function App() {
   >({});
   const hasDisplayCodeDrafts = Object.keys(displayCodeDrafts).length > 0;
   const attendancePendingStore = useAttendancePendingStore();
-  const { getMedia } = useDirectoryMedia(db);
   const combinedIsDirty = isDirty || attendancePendingStore.isDirty || hasDisplayCodeDrafts;
 
   const draftItems = useMemo(() => {
@@ -984,7 +981,6 @@ export default function App() {
             pendingStore={attendancePendingStore}
             onUpdateDb={saveDatabase}
             onEditDisplayCode={handleStageDisplayCodeDraft}
-            getMedia={getMedia}
           />
         )}
 
@@ -1113,7 +1109,6 @@ export default function App() {
             onSelectBook={(bookId) => {
               handleNavigateToBooks(bookId);
             }}
-            getMedia={getMedia}
           />
         )}
 
@@ -1130,7 +1125,6 @@ export default function App() {
               handleNavigateToClasses(classId);
             }}
             onNavigateToJournal={handleNavigateToJournal}
-            getMedia={getMedia}
           />
         )}
 
@@ -1164,7 +1158,6 @@ export default function App() {
               setViewerId(classId);
               handleTabChange('studio');
             }}
-            getMedia={getMedia}
           />
         )}
 
@@ -1186,7 +1179,6 @@ export default function App() {
               setViewerId(teacherId);
               handleTabChange('studio');
             }}
-            getMedia={getMedia}
           />
         )}
 
@@ -1208,7 +1200,6 @@ export default function App() {
               setViewerId(classId);
               handleTabChange('studio');
             }}
-            getMedia={getMedia}
           />
         )}
 
@@ -1280,7 +1271,6 @@ export default function App() {
             onNavigateToJournal={() => handleTabChange('journal')}
             isAdmin={effectiveIsAdmin}
             onOpenAdminLogin={handleOpenAdminLogin}
-            getMedia={getMedia}
           />
         )}
 
@@ -1320,8 +1310,6 @@ export default function App() {
         editingRule={editingRule}
         prefill={slotPrefill}
       />
-
-      <OfflineIndicator />
     </div>
   );
 }

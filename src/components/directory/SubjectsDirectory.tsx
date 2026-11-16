@@ -19,10 +19,6 @@ import {
 } from '../../utils/directoryRelations';
 import { useCardHighlight } from '../../hooks/useCardHighlight';
 import { DirectoryShell } from './DirectoryShell';
-import { DirectoryPicture } from './DirectoryPicture';
-import { PictureUploadModal } from './PictureUploadModal';
-import { DirectoryMediaItem } from '../../utils/directoryMedia';
-import { useAuth } from '../../context/AuthContext';
 
 interface SubjectsDirectoryProps {
   db: DatabaseState;
@@ -31,7 +27,6 @@ interface SubjectsDirectoryProps {
   onSelectSubject: (subjectId: string) => void;
   onNavigateToSyllabusScope?: (subjectId?: string, classId?: string) => void;
   onSelectBook?: (bookId: string) => void;
-  getMedia?: (entityType: 'subject', entityId?: string) => DirectoryMediaItem | undefined;
 }
 
 export const SubjectsDirectory: React.FC<SubjectsDirectoryProps> = ({
@@ -39,13 +34,10 @@ export const SubjectsDirectory: React.FC<SubjectsDirectoryProps> = ({
   initialSelectedSubjectId,
   onSelectSubject,
   onNavigateToSyllabusScope,
-  onSelectBook,
-  getMedia
+  onSelectBook
 }) => {
-  const auth = useAuth();
   const [search, setSearch] = useState('');
   const [selectedDept, setSelectedDept] = useState<string>('all');
-  const [pictureTarget, setPictureTarget] = useState<Subject | null>(null);
 
   const teacherMap = useMemo(() => new Map((db.teachers || []).map((t) => [t.id, t])), [db.teachers]);
   const roomMap = useMemo(() => new Map((db.rooms || []).map((r) => [r.id, r])), [db.rooms]);
@@ -112,8 +104,7 @@ export const SubjectsDirectory: React.FC<SubjectsDirectoryProps> = ({
   }, [db.rules]);
 
   return (
-    <>
-      <DirectoryShell
+    <DirectoryShell
       search={search}
       onSearchChange={setSearch}
       searchPlaceholder="Cari nama mapel, kode, kategori, atau judul kitab..."
@@ -165,40 +156,20 @@ export const SubjectsDirectory: React.FC<SubjectsDirectoryProps> = ({
             <div>
               {/* Card Header */}
               <div className="flex items-start justify-between gap-2 mb-2.5">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <DirectoryPicture
-                    src={getMedia?.('subject', subject.id)?.imageUrl}
-                    alt={subject.name}
-                    containerClassName="w-12 h-9 rounded-xl"
-                    canEdit={auth.isAdmin}
-                    onEditClick={() => setPictureTarget(subject)}
-                    editLabel={`Ubah gambar mapel ${subject.name}`}
-                    fallback={
-                      <div
-                        className="w-full h-full flex items-center justify-center"
-                        style={{ backgroundColor: subject.color || '#3B82F6' }}
-                      >
-                        <Book className="w-4 h-4 text-white drop-shadow-xs" />
-                      </div>
-                    }
+                <div className="flex items-center gap-2 min-w-0">
+                  <span
+                    className="w-4 h-4 rounded-md shrink-0 shadow-2xs border border-black/10"
+                    style={{ backgroundColor: subject.color }}
                   />
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <span
-                        className="w-2.5 h-2.5 rounded-full shrink-0 border border-black/10"
-                        style={{ backgroundColor: subject.color }}
-                      />
-                      <span className="text-base font-bold text-slate-900 truncate" title={subject.name}>
-                        {subject.name}
-                      </span>
-                    </div>
-                    {subject.department && (
-                      <span className="text-[11px] font-medium text-indigo-700 block">
-                        {subject.department}
-                      </span>
-                    )}
-                  </div>
+                  <span className="text-base font-bold text-slate-900 truncate" title={subject.name}>
+                    {subject.name}
+                  </span>
                 </div>
+                {subject.department && (
+                  <span className="text-[11px] font-medium text-indigo-700 shrink-0">
+                    {subject.department}
+                  </span>
+                )}
               </div>
 
               <div className="space-y-2 text-xs text-slate-600">
@@ -360,18 +331,5 @@ export const SubjectsDirectory: React.FC<SubjectsDirectoryProps> = ({
         );
       })}
     </DirectoryShell>
-
-      {pictureTarget && (
-        <PictureUploadModal
-          isOpen={true}
-          onClose={() => setPictureTarget(null)}
-          entityType="subject"
-          entityId={pictureTarget.id}
-          entityName={pictureTarget.name}
-          currentMedia={getMedia?.('subject', pictureTarget.id)}
-          aspectHint="landscape"
-        />
-      )}
-    </>
   );
 };

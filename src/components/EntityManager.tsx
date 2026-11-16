@@ -14,7 +14,6 @@ import { EntityTable } from './database/EntityTable';
 import { EntityModal } from './database/EntityModal';
 import { DeleteConfirmModal } from './database/DeleteConfirmModal';
 import { RoleRequestsView } from './admin/RoleRequestsView';
-import { DirectoryEntityType, DirectoryMediaItem } from '../utils/directoryMedia';
 
 export interface EntityManagerProps {
   db: DatabaseState;
@@ -34,7 +33,6 @@ export interface EntityManagerProps {
   onOpenAdminLogin?: () => void;
   initialSubTab?: DatabaseSubTab;
   onSelectSubTab?: (subTab: DatabaseSubTab) => void;
-  getMedia?: (entityType: DirectoryEntityType, entityId?: string) => DirectoryMediaItem | undefined;
 }
 
 // Cross-table cascade deletion handler
@@ -149,8 +147,7 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
   onNavigateToExportImport,
   onNavigateToRuleManager,
   initialSubTab = 'classes',
-  onSelectSubTab,
-  getMedia
+  onSelectSubTab
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<DatabaseSubTab>(initialSubTab);
   const [search, setSearch] = useState('');
@@ -555,7 +552,6 @@ export const EntityManager: React.FC<EntityManagerProps> = ({
         initialData={editingItem?.data || {}}
         isNew={editingItem?.isNew ?? false}
         db={db}
-        getMedia={getMedia}
       />
 
       {/* In-App Delete Confirmation Modal */}
