@@ -19,7 +19,15 @@ import { TeacherCard } from './directory/TeachersDirectory';
 import { StudentCard } from './directory/StudentsDirectory';
 import { PacingStatusBadge } from './syllabus/PacingStatusBadge';
 import { AttendanceHistoryModal } from './directory/AttendanceHistoryModal';
+import { PictureUploadModal } from './directory/PictureUploadModal';
 import { ClassIcon } from './ClassIcon';
+import { DirectoryEntityType, DirectoryMediaItem } from '../utils/directoryMedia';
+import { useAttendanceSummary } from '../hooks/useAttendanceSummary';
+import {
+  buildTeacherStatsMap,
+  getStudentEnrolledClasses,
+  getTeacherTaughtSubjects
+} from '../utils/directoryRelations';
 import {
   resolveViewerCurrentAndNextClass,
   formatUnitDisplay,
@@ -61,11 +69,14 @@ interface HomeTabProps {
   onSelectTeacherSchedule?: (teacherId: string) => void;
   onSelectStudentSchedule?: (classId: string, studentId?: string) => void;
   onNavigateToBooks?: (bookId?: string) => void;
+  onNavigateToSubjects?: (subjectId?: string) => void;
+  onNavigateToClasses?: (classId?: string) => void;
   onNavigateToAttendance?: (date: string, classId: string, sessionId: string, subjectId?: string) => void;
   isAdmin?: boolean;
   pendingStore?: AttendancePendingStore;
   onUpdateDb?: (updater: (prev: DatabaseState) => DatabaseState) => void;
   onEditDisplayCode?: (personType: 'teacher' | 'student', personId: string, nextDisplayCode: string) => void;
+  getMedia?: (entityType: DirectoryEntityType, entityId?: string) => DirectoryMediaItem | undefined;
 }
 
 export const HomeTab: React.FC<HomeTabProps> = ({
@@ -80,11 +91,14 @@ export const HomeTab: React.FC<HomeTabProps> = ({
   onSelectTeacherSchedule,
   onSelectStudentSchedule,
   onNavigateToBooks,
+  onNavigateToSubjects,
+  onNavigateToClasses,
   onNavigateToAttendance,
   isAdmin = false,
   pendingStore,
   onUpdateDb,
-  onEditDisplayCode
+  onEditDisplayCode,
+  getMedia
 }) => {
   const auth = useAuth();
   const effectiveIsAdmin = isAdmin || auth.isAdmin;
@@ -97,7 +111,9 @@ export const HomeTab: React.FC<HomeTabProps> = ({
   } | null>(null);
 
   // Attendance summary for Teacher / Student profile card
-  const [summaryMap, setSummaryMap] = useState<Record<string, AttendanceSummaryItem>>({});
+  const summaryType =
+    auth.role === 'teacher' ? 'teacher' : auth.role === 'student' ? 'student' : null;
+  const summaryMap = useAttendanceSummary(summaryType);
   const [activeHistoryModal, setActiveHistoryModal] = useState<{
     personType: 'teacher' | 'student';
     personId: string;
@@ -105,28 +121,11 @@ export const HomeTab: React.FC<HomeTabProps> = ({
     personSubtitle: string;
     summary?: AttendanceSummaryItem;
   } | null>(null);
-
-  useEffect(() => {
-    let isMounted = true;
-    if (auth.role === 'teacher') {
-      fetch('/api/attendance/summary?type=teacher')
-        .then((r) => r.json())
-        .then((d) => {
-          if (isMounted && d && typeof d === 'object') setSummaryMap(d);
-        })
-        .catch(() => {});
-    } else if (auth.role === 'student') {
-      fetch('/api/attendance/summary?type=student')
-        .then((r) => r.json())
-        .then((d) => {
-          if (isMounted && d && typeof d === 'object') setSummaryMap(d);
-        })
-        .catch(() => {});
-    }
-    return () => {
-      isMounted = false;
-    };
-  }, [auth.role]);
+  const [pictureTarget, setPictureTarget] = useState<{
+    entityType: 'teacher' | 'student';
+    entityId: string;
+    entityName: string;
+  } | null>(null);
 
   // Current Teacher Profile computation
   const myTeacher = useMemo(() => {
@@ -138,24 +137,17 @@ export const HomeTab: React.FC<HomeTabProps> = ({
     );
   }, [auth.role, auth.teacherId, auth.user, db.teachers]);
 
-  // Compute teaching load from active rules (exact same as TeachersDirectory)
+  // Compute teaching load & subjects via unified directory relation helper
+  const allTeacherStats = useMemo(() => buildTeacherStatsMap(db), [db]);
   const teacherStats = useMemo(() => {
     if (!myTeacher) return { sessions: 0, subjects: new Set<string>() };
-    const stats = { sessions: 0, subjects: new Set<string>() };
-    (db.rules || []).forEach((r) => {
-      if (r.active && r.teacherId === myTeacher.id) {
-        const daysCount = r.daysOfWeek?.length || 1;
-        stats.sessions += daysCount;
-        stats.subjects.add(r.subjectId);
-      }
-    });
-    return stats;
-  }, [myTeacher, db.rules]);
+    return allTeacherStats[myTeacher.id] || { sessions: 0, subjects: new Set<string>() };
+  }, [myTeacher, allTeacherStats]);
 
   const taughtSubjects = useMemo(() => {
     if (!myTeacher) return [];
-    return Array.from(teacherStats.subjects).map((sid) => db.subjects.find((s) => s.id === sid)).filter(Boolean);
-  }, [myTeacher, teacherStats, db.subjects]);
+    return getTeacherTaughtSubjects(db, myTeacher.id, allTeacherStats);
+  }, [myTeacher, allTeacherStats, db]);
 
   // Current Student Profile computation
   const myStudent = useMemo(() => {
@@ -167,35 +159,11 @@ export const HomeTab: React.FC<HomeTabProps> = ({
     );
   }, [auth.role, auth.studentId, auth.user, db.students]);
 
-  // Compute student enrollments (exact same as StudentsDirectory)
-  const studentEnrolledClasses = useMemo(() => {
-    if (!myStudent) {
-      if (viewerId) {
-        const cls = db.classes.find((c) => c.id === viewerId);
-        return cls ? [cls] : [];
-      }
-      return [];
-    }
-    const classIdSet = new Set<string>();
-    if (myStudent.enrolledClassIds && Array.isArray(myStudent.enrolledClassIds)) {
-      myStudent.enrolledClassIds.forEach((cid) => classIdSet.add(cid));
-    }
-    (db.enrollments || []).forEach((e: any) => {
-      if (e.studentId === myStudent.id) {
-        classIdSet.add(e.classId);
-      }
-    });
-    if (myStudent.classId) {
-      classIdSet.add(myStudent.classId);
-    }
-    const matched = db.classes.filter((c) => classIdSet.has(c.id));
-    if (matched.length > 0) return matched;
-    if (viewerId) {
-      const directCls = db.classes.find((c) => c.id === viewerId);
-      if (directCls) return [directCls];
-    }
-    return db.classes.slice(0, 1);
-  }, [myStudent, db.enrollments, db.classes, viewerId]);
+  // Compute student enrollments via unified directory relation helper
+  const studentEnrolledClasses = useMemo(
+    () => getStudentEnrolledClasses(db, myStudent, undefined, viewerId),
+    [db, myStudent, viewerId]
+  );
 
 
   const navigateToSyllabusTimeline = (subjectId: string, classId: string, date?: string) => {
@@ -1059,6 +1027,11 @@ export const HomeTab: React.FC<HomeTabProps> = ({
               stats={teacherStats}
               taughtSubjects={taughtSubjects}
               summary={summaryMap[myTeacher.id]}
+              pictureMedia={getMedia?.('teacher', myTeacher.id)}
+              canEditPicture={Boolean(effectiveIsAdmin || (auth.isTeacher && auth.teacherId === myTeacher.id))}
+              onEditPicture={(teacher) =>
+                setPictureTarget({ entityType: 'teacher', entityId: teacher.id, entityName: teacher.name })
+              }
               canEditDisplayCode={Boolean(
                 onEditDisplayCode && (effectiveIsAdmin || (auth.isTeacher && auth.teacherId === myTeacher.id))
               )}
@@ -1079,6 +1052,7 @@ export const HomeTab: React.FC<HomeTabProps> = ({
                   onNavigateToSchedule();
                 }
               }}
+              onSelectSubject={onNavigateToSubjects}
             />
           </div>
         </div>
@@ -1091,6 +1065,11 @@ export const HomeTab: React.FC<HomeTabProps> = ({
               student={myStudent}
               enrolledClasses={studentEnrolledClasses}
               summary={summaryMap[myStudent.id]}
+              pictureMedia={getMedia?.('student', myStudent.id)}
+              canEditPicture={Boolean(effectiveIsAdmin || (auth.isStudent && auth.studentId === myStudent.id))}
+              onEditPicture={(student) =>
+                setPictureTarget({ entityType: 'student', entityId: student.id, entityName: student.name })
+              }
               canEditDisplayCode={Boolean(
                 onEditDisplayCode && (effectiveIsAdmin || (auth.isStudent && auth.studentId === myStudent.id))
               )}
@@ -1111,6 +1090,7 @@ export const HomeTab: React.FC<HomeTabProps> = ({
                   onNavigateToSchedule();
                 }
               }}
+              onSelectClass={onNavigateToClasses}
             />
           </div>
         </div>
@@ -1341,6 +1321,18 @@ export const HomeTab: React.FC<HomeTabProps> = ({
           personName={activeHistoryModal.personName}
           personSubtitle={activeHistoryModal.personSubtitle}
           initialSummary={activeHistoryModal.summary}
+        />
+      )}
+
+      {pictureTarget && (
+        <PictureUploadModal
+          isOpen={true}
+          onClose={() => setPictureTarget(null)}
+          entityType={pictureTarget.entityType}
+          entityId={pictureTarget.entityId}
+          entityName={pictureTarget.entityName}
+          currentMedia={getMedia?.(pictureTarget.entityType, pictureTarget.entityId)}
+          aspectHint="square"
         />
       )}
     </div>

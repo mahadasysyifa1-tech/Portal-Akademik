@@ -8,7 +8,9 @@ import {
   FileText,
   ShoppingCart,
   ExternalLink,
-  BookOpen
+  BookOpen,
+  Camera,
+  Image as ImageIcon
 } from 'lucide-react';
 import { DatabaseState, BookChapter, BookLink } from '../../types';
 import {
@@ -18,6 +20,17 @@ import {
   DEFAULT_PALETTE_COLORS,
   checkTimeOverlap
 } from './entityConfigs';
+import { DirectoryEntityType, DirectoryMediaItem } from '../../utils/directoryMedia';
+import { DirectoryPicture } from '../directory/DirectoryPicture';
+import { PictureUploadModal } from '../directory/PictureUploadModal';
+
+const SUBTAB_TO_MEDIA_TYPE: Partial<Record<DatabaseSubTab, DirectoryEntityType>> = {
+  classes: 'class',
+  teachers: 'teacher',
+  students: 'student',
+  subjects: 'subject',
+  books: 'book',
+};
 
 interface EntityModalProps {
   isOpen: boolean;
@@ -27,6 +40,7 @@ interface EntityModalProps {
   initialData: any;
   isNew: boolean;
   db: DatabaseState;
+  getMedia?: (entityType: DirectoryEntityType, entityId?: string) => DirectoryMediaItem | undefined;
 }
 
 export const EntityModal: React.FC<EntityModalProps> = ({
@@ -36,9 +50,11 @@ export const EntityModal: React.FC<EntityModalProps> = ({
   subTab,
   initialData,
   isNew,
-  db
+  db,
+  getMedia
 }) => {
   const [formData, setFormData] = useState<any>({});
+  const [isPictureModalOpen, setIsPictureModalOpen] = useState(false);
 
   // Sync formData when initialData changes
   useEffect(() => {
@@ -211,6 +227,56 @@ export const EntityModal: React.FC<EntityModalProps> = ({
               />
             </div>
           )}
+
+          {/* Picture / Cover Block for all 5 Directory Types */}
+          {SUBTAB_TO_MEDIA_TYPE[subTab] && (() => {
+            const mediaType = SUBTAB_TO_MEDIA_TYPE[subTab]!;
+            const resolvedId = String(formData.id || '').trim();
+            const currentMedia = resolvedId ? getMedia?.(mediaType, resolvedId) : undefined;
+            const aspectClass =
+              mediaType === 'book'
+                ? 'w-12 h-16 rounded-xl'
+                : mediaType === 'subject'
+                ? 'w-14 h-10 rounded-xl'
+                : 'w-12 h-12 rounded-xl';
+            return (
+              <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <DirectoryPicture
+                    src={currentMedia?.imageUrl}
+                    alt={formData.name || formData.title || resolvedId || 'Foto'}
+                    containerClassName={aspectClass}
+                    fallback={
+                      <div className="w-full h-full flex items-center justify-center bg-slate-100 text-slate-400">
+                        <ImageIcon className="w-4 h-4" />
+                      </div>
+                    }
+                  />
+                  <div className="min-w-0">
+                    <p className="font-bold text-slate-800 text-xs truncate">
+                      {mediaType === 'book' ? 'Sampul Kitab' : 'Foto / Gambar Direktori'}
+                    </p>
+                    <p className="text-[11px] text-slate-500 truncate">
+                      {currentMedia
+                        ? currentMedia.sourceType === 'url'
+                          ? 'Tautan URL gambar aktif'
+                          : 'Tersimpan di Firebase Cloud'
+                        : 'Opsional — unggah foto atau tempel URL'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={!resolvedId}
+                  onClick={() => setIsPictureModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-300 transition-colors cursor-pointer shrink-0 disabled:opacity-50"
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                  <span>{currentMedia ? 'Ubah Gambar' : 'Unggah Gambar'}</span>
+                </button>
+              </div>
+            );
+          })()}
 
           {/* Specific Fields: Classes */}
           {subTab === 'classes' && (
@@ -1165,6 +1231,24 @@ export const EntityModal: React.FC<EntityModalProps> = ({
           </div>
         </form>
       </div>
+
+      {isPictureModalOpen && SUBTAB_TO_MEDIA_TYPE[subTab] && String(formData.id || '').trim() && (
+        <PictureUploadModal
+          isOpen={true}
+          onClose={() => setIsPictureModalOpen(false)}
+          entityType={SUBTAB_TO_MEDIA_TYPE[subTab]!}
+          entityId={String(formData.id).trim()}
+          entityName={formData.name || formData.title || String(formData.id).trim()}
+          currentMedia={getMedia?.(SUBTAB_TO_MEDIA_TYPE[subTab]!, String(formData.id).trim())}
+          aspectHint={
+            SUBTAB_TO_MEDIA_TYPE[subTab] === 'book'
+              ? 'portrait'
+              : SUBTAB_TO_MEDIA_TYPE[subTab] === 'subject'
+              ? 'landscape'
+              : 'square'
+          }
+        />
+      )}
     </div>
   );
 };

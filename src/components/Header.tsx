@@ -31,14 +31,15 @@ import {
   Sparkles,
   AlertCircle,
   Clock,
-  UserCheck
+  UserCheck,
+  School
 } from 'lucide-react';
 import { ScheduleConflict, DatabaseState } from '../types';
 import { LOGO_BASE64 } from '../assets/logo';
 import { useAuth } from '../context/AuthContext';
 import { ClaimRoleModal } from './ClaimRoleModal';
 
-export type ActiveTabType = 'home' | 'studio' | 'kaldik' | 'presensi' | 'enrollment' | 'journal' | 'syllabus' | 'subjects' | 'books' | 'teachers' | 'students' | 'conflicts' | 'database' | 'export-import' | 'rule-manager';
+export type ActiveTabType = 'home' | 'studio' | 'kaldik' | 'presensi' | 'enrollment' | 'journal' | 'syllabus' | 'subjects' | 'books' | 'classes' | 'teachers' | 'students' | 'conflicts' | 'database' | 'export-import' | 'rule-manager';
 
 export type DatabaseSubTab =
   | 'classes'
@@ -96,6 +97,7 @@ export const Header: React.FC<HeaderProps> = ({
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isLoginMenuOpen, setIsLoginMenuOpen] = useState(false);
   const [isClaimModalOpen, setIsClaimModalOpen] = useState(false);
+  const [hasDismissedClaimModal, setHasDismissedClaimModal] = useState(false);
   const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
   const effectiveIsAdmin = auth.isAdmin;
   const isAcademicVisible = effectiveIsAdmin || auth.isTeacher || auth.isStudent;
@@ -103,12 +105,17 @@ export const Header: React.FC<HeaderProps> = ({
   const prevDraftKey = React.useRef('');
   const currentDraftKey = (draftItems || []).join('|');
 
-  // Auto-open role claim modal when a user signs in as a guest with no pending request
+  // Auto-open role claim modal when a guest signs in without a pending request
   React.useEffect(() => {
-    if (auth.isAuthenticated && auth.role === 'guest' && (!auth.profile?.requestStatus || auth.profile?.requestStatus === 'none')) {
+    if (
+      !hasDismissedClaimModal &&
+      auth.isAuthenticated &&
+      auth.role === 'guest' &&
+      auth.profile?.requestStatus !== 'pending'
+    ) {
       setIsClaimModalOpen(true);
     }
-  }, [auth.isAuthenticated, auth.role, auth.profile?.requestStatus]);
+  }, [hasDismissedClaimModal, auth.isAuthenticated, auth.role, auth.profile?.requestStatus]);
 
   React.useEffect(() => {
     if (!effectiveIsAdmin) return;
@@ -180,6 +187,8 @@ export const Header: React.FC<HeaderProps> = ({
         return <BookOpen className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 text-indigo-600" />;
       case 'books':
         return <Book className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 text-indigo-600" />;
+      case 'classes':
+        return <School className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 text-indigo-600" />;
       case 'teachers':
         return <Users className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 text-indigo-600" />;
       case 'students':
@@ -703,6 +712,8 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="truncate max-w-[110px] sm:max-w-none">
                   {activeTab === 'books'
                     ? 'Buku'
+                    : activeTab === 'classes'
+                    ? 'Kelas'
                     : activeTab === 'teachers'
                     ? 'Pengajar'
                     : isAcademicVisible && activeTab === 'enrollment'
@@ -784,7 +795,7 @@ export const Header: React.FC<HeaderProps> = ({
                       </>
                     )}
 
-                    {/* Available for everyone logged in (Buku & Pengajar) */}
+                    {/* Available for everyone logged in (Buku, Kelas & Pengajar) */}
                     <button
                       type="button"
                       id="menu-item-books"
@@ -798,6 +809,21 @@ export const Header: React.FC<HeaderProps> = ({
                     >
                       <Book className="w-4 h-4 text-indigo-600" />
                       <span>Buku</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      id="menu-item-classes"
+                      onClick={() => {
+                        setActiveTab('classes');
+                        setIsMenuOpen(false);
+                      }}
+                      className={`w-full px-3.5 py-2 text-left text-xs font-semibold flex items-center gap-2.5 hover:bg-slate-50 transition-colors cursor-pointer ${
+                        activeTab === 'classes' ? 'text-amber-600 bg-amber-50/50' : 'text-slate-700'
+                      }`}
+                    >
+                      <School className="w-4 h-4 text-indigo-600" />
+                      <span>Kelas</span>
                     </button>
 
                     <button
@@ -961,7 +987,10 @@ export const Header: React.FC<HeaderProps> = ({
 
       <ClaimRoleModal
         isOpen={isClaimModalOpen}
-        onClose={() => setIsClaimModalOpen(false)}
+        onClose={() => {
+          setIsClaimModalOpen(false);
+          setHasDismissedClaimModal(true);
+        }}
         db={db || ({ teachers: [], students: [] } as any)}
       />
     </header>

@@ -7,6 +7,7 @@ import { UnifiedStudio } from './components/UnifiedStudio';
 import { ScheduleViewMode } from './components/JadwalView';
 import { SubjectsDirectory } from './components/directory/SubjectsDirectory';
 import { BooksDirectory } from './components/directory/BooksDirectory';
+import { ClassesDirectory } from './components/directory/ClassesDirectory';
 import { TeachersDirectory } from './components/directory/TeachersDirectory';
 import { StudentsDirectory } from './components/directory/StudentsDirectory';
 import { ConflictCenter } from './components/ConflictCenter';
@@ -21,6 +22,8 @@ import { EnrollmentView } from './components/attendance/EnrollmentView';
 import { RuleManagerView } from './components/ruleManager/RuleManagerView';
 import { parseUrlRoute, updateUrlRoute } from './utils/routing';
 import { useAttendancePendingStore } from './utils/useAttendancePendingStore';
+import { useDirectoryMedia } from './hooks/useDirectoryMedia';
+import { OfflineIndicator } from './components/pwa/OfflineIndicator';
 import type { ViewerRole } from './types/viewer';
 import { useAuth } from './context/AuthContext';
 
@@ -46,14 +49,7 @@ export default function App() {
   const initialRoute = useMemo(() => parseUrlRoute(), []);
 
   const [activeTab, setActiveTab] = useState<ActiveTabType>(() => {
-    if (initialRoute.tab) return initialRoute.tab;
-    try {
-      const savedTab = localStorage.getItem('ijma_last_tab') as ActiveTabType;
-      if (savedTab && ['home', 'studio', 'kaldik'].includes(savedTab)) {
-        return savedTab;
-      }
-    } catch {}
-    return 'home';
+    return initialRoute.tab || 'home';
   });
 
   const [db, setDb] = useState<DatabaseState>(() => {
@@ -68,10 +64,11 @@ export default function App() {
     return normalizeDatabaseState(defaultEmptyDb);
   });
 
-  // Permanently purge any residual legacy admin flag from browser localStorage
+  // Permanently purge any residual legacy admin flag and last-tab override from browser localStorage
   useEffect(() => {
     try {
       localStorage.removeItem('ijma_admin_auth');
+      localStorage.removeItem('ijma_last_tab');
     } catch {}
   }, []);
 
@@ -86,6 +83,7 @@ export default function App() {
   >({});
   const hasDisplayCodeDrafts = Object.keys(displayCodeDrafts).length > 0;
   const attendancePendingStore = useAttendancePendingStore();
+  const { getMedia } = useDirectoryMedia(db);
   const combinedIsDirty = isDirty || attendancePendingStore.isDirty || hasDisplayCodeDrafts;
 
   const draftItems = useMemo(() => {
@@ -208,6 +206,8 @@ export default function App() {
   const [selectedBookId, setSelectedBookId] = useState<string | null>(null);
   // Selected subject for Subjects Directory view
   const [selectedSubjectId, setSelectedSubjectId] = useState<string | null>(null);
+  // Selected class for Classes Directory view
+  const [selectedClassDirId, setSelectedClassDirId] = useState<string | null>(null);
 
   // Deep linking to Presensi view
   const [attendanceNavParams, setAttendanceNavParams] = useState<{
@@ -274,6 +274,14 @@ export default function App() {
     updateUrlRoute('subjects', viewerRole, viewerId, 'push');
   };
 
+  const handleNavigateToClasses = (classId?: string) => {
+    if (classId) {
+      setSelectedClassDirId(classId);
+    }
+    setActiveTab('classes');
+    updateUrlRoute('classes', viewerRole, viewerId, 'push');
+  };
+
   const selectKaldikView = (view: 'kaldik' | 'jurnal') => {
     setKaldikMode(view);
     setActiveTab('kaldik');
@@ -283,6 +291,7 @@ export default function App() {
     setJournalNavParams(null);
     setSelectedBookId(null);
     setSelectedSubjectId(null);
+    setSelectedClassDirId(null);
     if (tab === 'studio') {
       if (auth.isTeacher && auth.teacherId) {
         setStudioViewMode(ScheduleViewMode.TEACHER_WEEK);
@@ -308,8 +317,29 @@ export default function App() {
     }
   }, [activeTab]);
 
+  // Reset navigation state cleanly on sign-out so the next login lands on Beranda ('home')
+  // while the user lands immediately on AuthGate upon signing out.
+  const wasAuthenticatedRef = useRef(false);
+  useEffect(() => {
+    if (auth.isLoading) return;
+    if (auth.isAuthenticated) {
+      wasAuthenticatedRef.current = true;
+      return;
+    }
+    if (wasAuthenticatedRef.current) {
+      wasAuthenticatedRef.current = false;
+      setActiveTab('home');
+      setKaldikMode('kaldik');
+      setJournalNavParams(null);
+      setSelectedBookId(null);
+      setSelectedSubjectId(null);
+      setSelectedClassDirId(null);
+      updateUrlRoute('home', viewerRole, viewerId, 'replace');
+    }
+  }, [auth.isLoading, auth.isAuthenticated, viewerRole, viewerId]);
+
   // Role-based route guard:
-  // - guest: const allowedNonAdminTabs: ActiveTabType[] = ['home', 'studio', 'kaldik', 'books', 'teachers'];
+  // - guest: const allowedNonAdminTabs: ActiveTabType[] = ['home', 'studio', 'kaldik', 'books', 'classes', 'teachers'];
   // - student: ro all pages (except admin pages in submenu: rule-manager, database, conflicts, export-import)
   // - teacher: student + personal attndmodal permission
   // - admin: full access
@@ -317,9 +347,9 @@ export default function App() {
     if (!auth.isAuthenticated) return;
 
     if (auth.role === 'guest') {
-      const allowedNonAdminTabs: ActiveTabType[] = ['home', 'studio', 'kaldik', 'books', 'teachers'];
+      const allowedNonAdminTabs: ActiveTabType[] = ['home', 'studio', 'kaldik', 'books', 'classes', 'teachers'];
       if (!allowedNonAdminTabs.includes(activeTab)) {
-        setActiveTab('studio');
+        setActiveTab('home');
       }
       if (kaldikMode === 'jurnal') {
         setKaldikMode('kaldik');
@@ -328,15 +358,16 @@ export default function App() {
       // student & teacher: access to all normal pages except the 4 admin submenus
       const adminOnlyTabs: ActiveTabType[] = ['rule-manager', 'database', 'conflicts', 'export-import'];
       if (adminOnlyTabs.includes(activeTab)) {
-        setActiveTab('studio');
+        setActiveTab('home');
       }
     }
   }, [auth.isAuthenticated, auth.role, effectiveIsAdmin, activeTab, kaldikMode]);
 
-  // Sync token in localStorage & URL
+  // Sync viewer identity in localStorage & URL when authenticated
   useEffect(() => {
+    if (!auth.isAuthenticated) return;
+
     try {
-      localStorage.setItem('ijma_last_tab', activeTab);
       if (activeTab === 'home' || activeTab === 'studio') {
         if (viewerRole) localStorage.setItem('ijma_viewer_role', viewerRole);
         if (viewerId) localStorage.setItem('ijma_viewer_id', viewerId);
@@ -344,7 +375,7 @@ export default function App() {
     } catch {}
 
     updateUrlRoute(activeTab, viewerRole, viewerId, 'replace', activeTab === 'studio' ? studioViewMode : undefined);
-  }, [activeTab, viewerRole, viewerId, studioViewMode]);
+  }, [auth.isAuthenticated, activeTab, viewerRole, viewerId, studioViewMode]);
 
   // Handle browser back/forward buttons (popstate)
   useEffect(() => {
@@ -946,11 +977,14 @@ export default function App() {
               handleTabChange('studio');
             }}
             onNavigateToBooks={handleNavigateToBooks}
+            onNavigateToSubjects={auth.role !== 'guest' ? handleNavigateToSubjects : undefined}
+            onNavigateToClasses={handleNavigateToClasses}
             onNavigateToAttendance={handleNavigateToAttendance}
             isAdmin={effectiveIsAdmin}
             pendingStore={attendancePendingStore}
             onUpdateDb={saveDatabase}
             onEditDisplayCode={handleStageDisplayCodeDraft}
+            getMedia={getMedia}
           />
         )}
 
@@ -1079,6 +1113,7 @@ export default function App() {
             onSelectBook={(bookId) => {
               handleNavigateToBooks(bookId);
             }}
+            getMedia={getMedia}
           />
         )}
 
@@ -1091,16 +1126,22 @@ export default function App() {
             onSelectSubject={(subjectId) => {
               handleNavigateToSubjects(subjectId);
             }}
+            onSelectClass={(classId) => {
+              handleNavigateToClasses(classId);
+            }}
             onNavigateToJournal={handleNavigateToJournal}
+            getMedia={getMedia}
           />
         )}
 
-        {/* Menu Tab: Guru */}
-        {activeTab === 'teachers' && (
-          <TeachersDirectory
+        {/* Menu Tab: Kelas */}
+        {activeTab === 'classes' && (
+          <ClassesDirectory
             db={db}
+            initialSelectedClassId={selectedClassDirId}
             onBackToSchedule={() => handleTabChange('studio')}
-            onEditTeacherDisplayCode={(id, next) => handleStageDisplayCodeDraft('teacher', id, next)}
+            onSelectSubject={auth.role !== 'guest' ? handleNavigateToSubjects : undefined}
+            onSelectBook={handleNavigateToBooks}
             onSelectTeacherSchedule={(teacherId) => {
               setStudioViewMode(ScheduleViewMode.TEACHER_WEEK);
               setStudioSelectedTeacherId(teacherId);
@@ -1112,6 +1153,40 @@ export default function App() {
               setViewerId(teacherId);
               handleTabChange('studio');
             }}
+            onSelectClassSchedule={(classId) => {
+              setStudioViewMode(ScheduleViewMode.STUDENT_WEEK);
+              setStudioSelectedClassId(classId);
+              try {
+                localStorage.setItem('ijma_studio_view_mode', ScheduleViewMode.STUDENT_WEEK);
+                localStorage.setItem('ijma_studio_selected_class', classId);
+              } catch {}
+              setViewerRole('student');
+              setViewerId(classId);
+              handleTabChange('studio');
+            }}
+            getMedia={getMedia}
+          />
+        )}
+
+        {/* Menu Tab: Guru */}
+        {activeTab === 'teachers' && (
+          <TeachersDirectory
+            db={db}
+            onBackToSchedule={() => handleTabChange('studio')}
+            onEditTeacherDisplayCode={(id, next) => handleStageDisplayCodeDraft('teacher', id, next)}
+            onSelectSubject={auth.role !== 'guest' ? handleNavigateToSubjects : undefined}
+            onSelectTeacherSchedule={(teacherId) => {
+              setStudioViewMode(ScheduleViewMode.TEACHER_WEEK);
+              setStudioSelectedTeacherId(teacherId);
+              try {
+                localStorage.setItem('ijma_studio_view_mode', ScheduleViewMode.TEACHER_WEEK);
+                localStorage.setItem('ijma_studio_selected_teacher', teacherId);
+              } catch {}
+              setViewerRole('teacher');
+              setViewerId(teacherId);
+              handleTabChange('studio');
+            }}
+            getMedia={getMedia}
           />
         )}
 
@@ -1121,6 +1196,7 @@ export default function App() {
             db={db}
             onBackToSchedule={() => handleTabChange('studio')}
             onEditStudentDisplayCode={(id, next) => handleStageDisplayCodeDraft('student', id, next)}
+            onSelectClass={handleNavigateToClasses}
             onSelectStudentSchedule={(classId) => {
               setStudioViewMode(ScheduleViewMode.STUDENT_WEEK);
               setStudioSelectedClassId(classId);
@@ -1132,6 +1208,7 @@ export default function App() {
               setViewerId(classId);
               handleTabChange('studio');
             }}
+            getMedia={getMedia}
           />
         )}
 
@@ -1203,6 +1280,7 @@ export default function App() {
             onNavigateToJournal={() => handleTabChange('journal')}
             isAdmin={effectiveIsAdmin}
             onOpenAdminLogin={handleOpenAdminLogin}
+            getMedia={getMedia}
           />
         )}
 
@@ -1242,6 +1320,8 @@ export default function App() {
         editingRule={editingRule}
         prefill={slotPrefill}
       />
+
+      <OfflineIndicator />
     </div>
   );
 }

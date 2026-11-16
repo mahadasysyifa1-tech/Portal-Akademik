@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="96" fill="#FFFFFF"/>
+  <!-- Corner golden accents -->
+  <path d="M56 56H176L56 176V56Z" fill="#D49B1A"/>
+  <path d="M456 56H336L456 176V56Z" fill="#D49B1A"/>
+  <path d="M56 456H176L56 336V456Z" fill="#D49B1A"/>
+  <path d="M456 456H336L456 336V456Z" fill="#D49B1A"/>
+  <!-- Navy diamond frame -->
+  <path d="M256 32L480 256L256 480L32 256L256 32Z" stroke="#024884" stroke-width="24" fill="#FFFFFF"/>
+  <!-- Inner navy circle -->
+  <circle cx="256" cy="264" r="144" fill="#024884"/>
+  <!-- Golden mortarboard cap -->
+  <path d="M256 146L372 204L256 262L140 204L256 146Z" fill="#FACC15"/>
+  <path d="M188 232V282C188 296 218 312 256 312C294 312 324 296 324 282V232L256 266L188 232Z" fill="#EAB308"/>
+  <rect x="352" y="208" width="12" height="68" rx="6" fill="#FACC15"/>
+  <!-- Minimalist white cupped hands -->
+  <path d="M144 268C144 338 190 388 242 400C230 374 206 346 184 328C168 314 156 292 144 268Z" fill="#FFFFFF"/>
+  <path d="M368 268C368 338 322 388 270 400C282 374 306 346 328 328C344 314 356 292 368 268Z" fill="#FFFFFF"/>
+</svg>

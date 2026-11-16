@@ -29,6 +29,7 @@ export function parseUrlRoute(db?: DatabaseState): ParsedRoute {
       else if (lower === 'enrollment' || lower === 'roster') tab = 'enrollment';
       else if (lower === 'subjects' || lower === 'pelajaran') tab = 'subjects';
       else if (lower === 'books' || lower === 'kitab' || lower === 'buku') tab = 'books';
+      else if (lower === 'classes' || lower === 'kelas' || lower === 'rombel') tab = 'classes';
       else if (lower === 'teachers' || lower === 'guru') tab = 'teachers';
       else if (lower === 'students' || lower === 'santri' || lower === 'siswa' || lower === 'murid') tab = 'students';
       else if (lower === 'conflicts' || lower === 'konflik') tab = 'conflicts';

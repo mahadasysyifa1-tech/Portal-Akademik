@@ -41,6 +41,15 @@ import {
   rejectRoleRequest,
   updatePeopleDisplayCodes,
 } from './server/db/auth.ts';
+import {
+  ensureVapidKeys,
+  upsertPushSubscription,
+  removePushSubscription,
+  getPushSubscriptionStatus,
+  sendTestPushToEndpoint,
+  notifyAttendanceLoggedForMeeting,
+  startPushScheduler,
+} from './server/push.ts';
 
 const app = express();
 const PORT = 3000;
@@ -56,6 +65,9 @@ const dbReadinessPromise = (async () => {
     await ensureDataSeeded();
     dbReady = true;
     console.log('[Database] Turso LibSQL database ready and seeded.');
+    if (tursoClient) {
+      startPushScheduler(tursoClient, getDatabaseState);
+    }
     return true;
   } catch (err: any) {
     dbInitError = err;
@@ -107,8 +119,8 @@ async function requireDatabaseReady(req: express.Request, res: express.Response,
   }
 }
 
-// Gate all DB, auth, and attendance endpoints until Turso connection succeeds
-app.use(['/api/database', '/api/attendance', '/api/enrollment', '/api/auth'], requireDatabaseReady);
+// Gate all DB, auth, push, and attendance endpoints until Turso connection succeeds
+app.use(['/api/database', '/api/attendance', '/api/enrollment', '/api/auth', '/api/push'], requireDatabaseReady);
 
 
 // Primary data endpoints for Portal Akademik (Turso Cloud SQL + SQLite fallback)
@@ -294,6 +306,81 @@ app.post('/api/auth/reject-request', async (req, res) => {
 });
 
 // ============================================================================
+// Web Push Notifications (VAPID) Endpoints
+// ============================================================================
+app.get('/api/push/vapid-public-key', async (_req, res) => {
+  if (!tursoClient) {
+    return res.status(503).json({ error: 'Turso database is offline' });
+  }
+  try {
+    const { publicKey } = await ensureVapidKeys(tursoClient);
+    res.json({ publicKey });
+  } catch (err: any) {
+    console.error('Failed to provide VAPID public key:', err);
+    res.status(500).json({ error: 'Gagal menyiapkan kunci Web Push', details: err?.message });
+  }
+});
+
+app.get('/api/push/status', async (req, res) => {
+  if (!tursoClient) {
+    return res.status(503).json({ error: 'Turso database is offline' });
+  }
+  const endpoint = req.query.endpoint ? String(req.query.endpoint) : undefined;
+  const uid = req.query.uid ? String(req.query.uid) : undefined;
+  try {
+    const status = await getPushSubscriptionStatus(tursoClient, endpoint, uid);
+    res.json(status);
+  } catch (err: any) {
+    console.error('Failed to read push status:', err);
+    res.status(500).json({ error: 'Gagal memeriksa status notifikasi' });
+  }
+});
+
+app.post('/api/push/subscribe', async (req, res) => {
+  if (!tursoClient) {
+    return res.status(503).json({ error: 'Turso database is offline' });
+  }
+  try {
+    const result = await upsertPushSubscription(tursoClient, req.body || {});
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    console.error('Failed to subscribe Web Push:', err);
+    res.status(400).json({ error: err?.message || 'Gagal mendaftarkan perangkat untuk notifikasi' });
+  }
+});
+
+app.post('/api/push/unsubscribe', async (req, res) => {
+  if (!tursoClient) {
+    return res.status(503).json({ error: 'Turso database is offline' });
+  }
+  const { endpoint } = req.body || {};
+  try {
+    await removePushSubscription(tursoClient, String(endpoint || ''));
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('Failed to unsubscribe Web Push:', err);
+    res.status(500).json({ error: 'Gagal menonaktifkan langganan notifikasi' });
+  }
+});
+
+app.post('/api/push/test', async (req, res) => {
+  if (!tursoClient) {
+    return res.status(503).json({ error: 'Turso database is offline' });
+  }
+  const { endpoint } = req.body || {};
+  if (!endpoint) {
+    return res.status(400).json({ error: 'Endpoint langganan wajib diisi.' });
+  }
+  try {
+    const delivered = await sendTestPushToEndpoint(tursoClient, String(endpoint));
+    res.json({ success: delivered });
+  } catch (err: any) {
+    console.error('Failed to send test push:', err);
+    res.status(400).json({ error: err?.message || 'Gagal mengirim tes notifikasi' });
+  }
+});
+
+// ============================================================================
 // Attendance (Presensi Terpadu) Endpoints
 // ============================================================================
 app.get('/api/attendance/month-rollcalls', async (req, res) => {
@@ -344,6 +431,18 @@ app.post('/api/attendance/batch-save', async (req, res) => {
   try {
     const result = await batchSaveAttendance(tursoClient, { statusUpdates, rollCallLogs });
     invalidateDatabaseStateCache();
+    if (Array.isArray(rollCallLogs) && rollCallLogs.length > 0) {
+      const meetingIds = Array.from(
+        new Set(rollCallLogs.map((l: any) => l?.meetingId).filter(Boolean))
+      ) as string[];
+      if (meetingIds.length > 0) {
+        getDatabaseState()
+          .then((state) =>
+            Promise.all(meetingIds.map((mid) => notifyAttendanceLoggedForMeeting(tursoClient!, mid, state)))
+          )
+          .catch(() => {});
+      }
+    }
     res.json(result);
   } catch (err: any) {
     console.error('Failed to batch save attendance:', err);
@@ -397,6 +496,9 @@ app.post('/api/attendance/meetings/:meetingId/logs', async (req, res) => {
   try {
     await saveMeetingRollCall(tursoClient, meetingId, teacherLog, studentLogs || [], meetingNotes, materialProgress);
     invalidateDatabaseStateCache();
+    getDatabaseState()
+      .then((state) => notifyAttendanceLoggedForMeeting(tursoClient!, meetingId, state))
+      .catch(() => {});
     res.json({ success: true, savedAt: new Date().toISOString(), meetingId });
   } catch (err: any) {
     console.error('Failed to save meeting roll-call:', err);

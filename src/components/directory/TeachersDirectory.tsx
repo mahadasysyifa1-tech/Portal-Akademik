@@ -1,19 +1,33 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { DatabaseState, Teacher, AttendanceSummaryItem } from '../../types';
-import { Users, Search, Mail, BookOpen, Clock, ArrowLeft } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { DatabaseState, Teacher, AttendanceSummaryItem, Subject } from '../../types';
+import { Users, Mail } from 'lucide-react';
 import { AttendanceHistoryModal } from './AttendanceHistoryModal';
+import { AttendanceSummaryBar } from './AttendanceSummaryBar';
+import { DirectoryShell } from './DirectoryShell';
 import { DisplayCodeBadge } from './DisplayCodeBadge';
+import { DirectoryPicture } from './DirectoryPicture';
+import { PictureUploadModal } from './PictureUploadModal';
 import { useAuth } from '../../context/AuthContext';
+import { useAttendanceSummary } from '../../hooks/useAttendanceSummary';
+import { DirectoryMediaItem } from '../../utils/directoryMedia';
+import {
+  buildTeacherStatsMap,
+  getTeacherTaughtSubjects
+} from '../../utils/directoryRelations';
 
 export interface TeacherCardProps {
   teacher: Teacher;
   stats?: { sessions: number; subjects: Set<string> };
-  taughtSubjects?: Array<any>;
+  taughtSubjects?: Array<Subject | undefined>;
   summary?: AttendanceSummaryItem;
+  pictureMedia?: DirectoryMediaItem;
+  canEditPicture?: boolean;
+  onEditPicture?: (teacher: Teacher) => void;
   canEditDisplayCode?: boolean;
   onEditDisplayCode?: (teacherId: string, nextDisplayCode: string) => void;
   onOpenHistory?: (teacher: Teacher) => void;
   onSelectSchedule?: (teacherId: string) => void;
+  onSelectSubject?: (subjectId: string) => void;
 }
 
 export const TeacherCard: React.FC<TeacherCardProps> = ({
@@ -21,38 +35,66 @@ export const TeacherCard: React.FC<TeacherCardProps> = ({
   stats = { sessions: 0, subjects: new Set() },
   taughtSubjects = [],
   summary,
+  pictureMedia,
+  canEditPicture = false,
+  onEditPicture,
   canEditDisplayCode = false,
   onEditDisplayCode,
   onOpenHistory,
-  onSelectSchedule
+  onSelectSchedule,
+  onSelectSubject
 }) => {
-  const hasData = summary && summary.total > 0;
+  const initials =
+    teacher.name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() || '')
+      .join('') || 'U';
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs hover:shadow-xs transition-shadow flex flex-col justify-between">
       <div>
-        <div className="flex items-start justify-between gap-2 mb-2">
-          <div>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <h3 className="text-sm font-bold text-slate-900">
-                {teacher.name}
-              </h3>
-              {teacher.panggilan && (
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
-                  {teacher.panggilan}
-                </span>
-              )}
-              <DisplayCodeBadge
-                value={teacher.displayCode ?? teacher.display_code ?? ''}
-                canEdit={canEditDisplayCode}
-                onStageChange={(next) => onEditDisplayCode?.(teacher.id, next)}
-              />
+        <div className="flex items-start justify-between gap-2 mb-2.5">
+          <div className="flex items-start gap-3 min-w-0">
+            <DirectoryPicture
+              src={pictureMedia?.imageUrl}
+              alt={teacher.name}
+              containerClassName="w-12 h-12 rounded-2xl"
+              canEdit={canEditPicture}
+              onEditClick={onEditPicture ? () => onEditPicture(teacher) : undefined}
+              editLabel={`Ubah foto ${teacher.name}`}
+              fallback={
+                <div
+                  className="w-full h-full flex items-center justify-center font-bold text-xs text-white select-none"
+                  style={{ backgroundColor: teacher.color || '#4F46E5' }}
+                >
+                  {initials}
+                </div>
+              }
+            />
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <h3 className="text-sm font-bold text-slate-900">
+                  {teacher.name}
+                </h3>
+                {teacher.panggilan && (
+                  <span className="text-[11px] font-semibold text-amber-700">
+                    · {teacher.panggilan}
+                  </span>
+                )}
+                <DisplayCodeBadge
+                  value={teacher.displayCode ?? teacher.display_code ?? ''}
+                  canEdit={canEditDisplayCode}
+                  onStageChange={(next) => onEditDisplayCode?.(teacher.id, next)}
+                />
+              </div>
+              <span className="text-[11px] text-slate-500">
+                {teacher.department || 'Pengajar'}
+              </span>
             </div>
-            <span className="text-[11px] text-slate-500">
-              {teacher.department || 'Pengajar'}
-            </span>
           </div>
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100">
+          <span className="text-[11px] font-bold text-indigo-700 shrink-0 tabular-nums">
             {stats.sessions} sesi / pekan
           </span>
         </div>
@@ -69,20 +111,38 @@ export const TeacherCard: React.FC<TeacherCardProps> = ({
           <span className="text-[11px] font-semibold text-slate-500 block">
             Mata Pelajaran yang Diampu:
           </span>
-          <div className="flex flex-wrap gap-1">
+          <div className="flex flex-wrap gap-1.5">
             {taughtSubjects.length > 0 ? (
-              taughtSubjects.map((s) => s && (
-                <span
-                  key={s.id}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-100 text-slate-700"
-                >
-                  <span
-                    className="w-2 h-2 rounded-full"
-                    style={{ backgroundColor: s.color }}
-                  />
-                  <span>{s.name}</span>
-                </span>
-              ))
+              taughtSubjects.map((s) =>
+                s ? (
+                  onSelectSubject ? (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => onSelectSubject(s.id)}
+                      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-slate-100 border border-slate-200/80 text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-300 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                      title={`Lihat rincian mapel ${s.name}`}
+                    >
+                      <span
+                        className="w-2 h-2 rounded-full shrink-0"
+                        style={{ backgroundColor: s.color }}
+                      />
+                      <span>{s.name}</span>
+                    </button>
+                  ) : (
+                    <span
+                      key={s.id}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-100 text-slate-700"
+                    >
+                      <span
+                        className="w-2 h-2 rounded-full shrink-0"
+                        style={{ backgroundColor: s.color }}
+                      />
+                      <span>{s.name}</span>
+                    </span>
+                  )
+                ) : null
+              )
             ) : (
               <span className="text-[11px] text-slate-400 italic">
                 Belum ada jadwal aktif
@@ -91,63 +151,23 @@ export const TeacherCard: React.FC<TeacherCardProps> = ({
           </div>
         </div>
 
-        {/* Presence Summary Progress Bar */}
-        <div
-          onClick={() => onOpenHistory?.(teacher)}
-          className={`mt-3 pt-2.5 border-t border-slate-100 group -mx-1 px-1.5 py-1.5 rounded-xl transition-colors ${onOpenHistory ? 'cursor-pointer hover:bg-slate-50/80' : ''}`}
+        <AttendanceSummaryBar
+          label="Kehadiran Mengajar:"
+          summary={summary}
+          onOpenHistory={onOpenHistory ? () => onOpenHistory(teacher) : undefined}
           title={onOpenHistory ? 'Klik untuk melihat riwayat kehadiran mengajar' : undefined}
-        >
-          <div className="flex items-center justify-between text-xs mb-1">
-            <span className={`text-[11px] font-semibold text-slate-600 ${onOpenHistory ? 'group-hover:text-indigo-600' : ''} transition-colors`}>
-              Kehadiran Mengajar:
-            </span>
-            {hasData ? (
-              <span className="font-bold text-xs flex items-center gap-1">
-                <span
-                  className={
-                    summary.rate >= 85
-                      ? 'text-emerald-600'
-                      : summary.rate >= 70
-                      ? 'text-amber-600'
-                      : 'text-rose-600'
-                  }
-                >
-                  {summary.rate}%
-                </span>
-                <span className="text-[10px] font-normal text-slate-400">
-                  ({summary.hadir + summary.terlambat}/{summary.total} sesi)
-                </span>
-              </span>
-            ) : (
-              <span className="text-[10px] text-slate-400 italic">Belum ada data</span>
-            )}
-          </div>
-          <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
-            <div
-              className={`h-full rounded-full transition-all duration-300 ${
-                !hasData
-                  ? 'bg-slate-200'
-                  : summary.rate >= 85
-                  ? 'bg-emerald-500'
-                  : summary.rate >= 70
-                  ? 'bg-amber-500'
-                  : 'bg-rose-500'
-              }`}
-              style={{ width: `${hasData ? Math.min(100, summary.rate) : 0}%` }}
-            />
-          </div>
-        </div>
+        />
       </div>
 
       <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between">
-        <span className="text-[11px] text-slate-400">
+        <span className="text-[11px] text-slate-400 tabular-nums">
           Beban maks: {teacher.maxPeriodsPerWeek} sesi
         </span>
         {onSelectSchedule && (
           <button
             type="button"
             onClick={() => onSelectSchedule(teacher.id)}
-            className="px-2.5 py-1 text-xs font-semibold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+            className="px-2.5 py-1 text-xs font-semibold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
           >
             Lihat Jadwal Guru →
           </button>
@@ -161,39 +181,28 @@ interface TeachersDirectoryProps {
   db: DatabaseState;
   onBackToSchedule: () => void;
   onSelectTeacherSchedule: (teacherId: string) => void;
+  onSelectSubject?: (subjectId: string) => void;
   onEditTeacherDisplayCode?: (teacherId: string, nextDisplayCode: string) => void;
+  getMedia?: (entityType: 'teacher', entityId?: string) => DirectoryMediaItem | undefined;
 }
 
 export const TeachersDirectory: React.FC<TeachersDirectoryProps> = ({
   db,
-  onBackToSchedule,
   onSelectTeacherSchedule,
-  onEditTeacherDisplayCode
+  onSelectSubject,
+  onEditTeacherDisplayCode,
+  getMedia
 }) => {
   const auth = useAuth();
   const [search, setSearch] = useState('');
-  const [summaryMap, setSummaryMap] = useState<Record<string, AttendanceSummaryItem>>({});
+  const summaryMap = useAttendanceSummary('teacher');
   const [activeTeacherForHistory, setActiveTeacherForHistory] = useState<Teacher | null>(null);
-
-  useEffect(() => {
-    let isMounted = true;
-    fetch('/api/attendance/summary?type=teacher')
-      .then((res) => res.json())
-      .then((data) => {
-        if (isMounted && data && typeof data === 'object') {
-          setSummaryMap(data);
-        }
-      })
-      .catch((err) => console.error('Failed to load teacher attendance summary:', err));
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-  const subjectMap = useMemo(() => new Map(db.subjects.map((s) => [s.id, s])), [db.subjects]);
+  const [pictureTarget, setPictureTarget] = useState<Teacher | null>(null);
 
   const filteredTeachers = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return db.teachers;
     return db.teachers.filter((t) => {
-      const q = search.toLowerCase();
       return (
         t.name.toLowerCase().includes(q) ||
         (t.panggilan && t.panggilan.toLowerCase().includes(q)) ||
@@ -204,46 +213,31 @@ export const TeachersDirectory: React.FC<TeachersDirectoryProps> = ({
     });
   }, [db.teachers, search]);
 
-  // Compute teaching load per teacher
-  const teacherStats = useMemo(() => {
-    const stats: Record<string, { sessions: number; subjects: Set<string> }> = {};
-    db.teachers.forEach((t) => {
-      stats[t.id] = { sessions: 0, subjects: new Set() };
-    });
-
-    db.rules.forEach((r) => {
-      if (r.active && stats[r.teacherId]) {
-        const daysCount = r.daysOfWeek?.length || 1;
-        stats[r.teacherId].sessions += daysCount;
-        stats[r.teacherId].subjects.add(r.subjectId);
-      }
-    });
-
-    return stats;
-  }, [db.teachers, db.rules]);
+  const teacherStats = useMemo(() => buildTeacherStatsMap(db), [db]);
 
   return (
-    <div className="space-y-4 animate-in fade-in duration-200">
-      {/* Top Header */}
-      <div className="flex flex-wrap items-end gap-3">
-        {/* Search */}
-        <div className="relative min-w-[240px]">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Cari asatidz / pengampu..."
-            className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white text-slate-900"
-          />
-        </div>
-      </div>
-
-      {/* Teachers Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+    <>
+      <DirectoryShell
+        search={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Cari asatidz / pengampu..."
+        focusRingClass="focus-visible:ring-indigo-500"
+        summarySlot={
+          <>
+            Menampilkan <strong className="text-slate-800">{filteredTeachers.length}</strong> dari{' '}
+            {db.teachers?.length || 0} pengajar
+          </>
+        }
+        isEmpty={filteredTeachers.length === 0}
+        emptyState={{
+          icon: <Users className="w-10 h-10 mx-auto text-slate-300" />,
+          title: 'Tidak ada pengajar yang cocok',
+          description: 'Coba ubah kata kunci pencarian Anda.'
+        }}
+      >
         {filteredTeachers.map((teacher) => {
-          const stats = teacherStats[teacher.id] || { sessions: 0, subjects: new Set() };
-          const taughtSubjects = Array.from(stats.subjects).map((sid) => subjectMap.get(sid)).filter(Boolean);
+          const stats = teacherStats[teacher.id] || { sessions: 0, subjects: new Set<string>() };
+          const taughtSubjects = getTeacherTaughtSubjects(db, teacher.id, teacherStats);
 
           return (
             <TeacherCard
@@ -252,18 +246,21 @@ export const TeachersDirectory: React.FC<TeachersDirectoryProps> = ({
               stats={stats}
               taughtSubjects={taughtSubjects}
               summary={summaryMap[teacher.id]}
+              pictureMedia={getMedia?.('teacher', teacher.id)}
+              canEditPicture={Boolean(auth.isAdmin || (auth.isTeacher && auth.teacherId === teacher.id))}
+              onEditPicture={setPictureTarget}
               canEditDisplayCode={Boolean(
                 onEditTeacherDisplayCode && (auth.isAdmin || (auth.isTeacher && auth.teacherId === teacher.id))
               )}
               onEditDisplayCode={onEditTeacherDisplayCode}
               onOpenHistory={setActiveTeacherForHistory}
               onSelectSchedule={onSelectTeacherSchedule}
+              onSelectSubject={onSelectSubject}
             />
           );
         })}
-      </div>
+      </DirectoryShell>
 
-      {/* Teacher Attendance History Modal */}
       {activeTeacherForHistory && (
         <AttendanceHistoryModal
           isOpen={true}
@@ -275,6 +272,18 @@ export const TeachersDirectory: React.FC<TeachersDirectoryProps> = ({
           initialSummary={summaryMap[activeTeacherForHistory.id]}
         />
       )}
-    </div>
+
+      {pictureTarget && (
+        <PictureUploadModal
+          isOpen={true}
+          onClose={() => setPictureTarget(null)}
+          entityType="teacher"
+          entityId={pictureTarget.id}
+          entityName={pictureTarget.name}
+          currentMedia={getMedia?.('teacher', pictureTarget.id)}
+          aspectHint="square"
+        />
+      )}
+    </>
   );
 };
