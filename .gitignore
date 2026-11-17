@@ -2,7 +2,7 @@ node_modules/
 build/
 dist/
 coverage/
-script/
+scripts/
 data/
 repomix/
 .DS_Store

@@ -106,7 +106,7 @@ export const Header: React.FC<HeaderProps> = ({
 
   // Auto-open role claim modal when a user signs in as a guest with no pending request
   React.useEffect(() => {
-    if (auth.isAuthenticated && auth.role === 'guest' && (!auth.profile?.requestStatus || auth.profile?.requestStatus === 'none')) {
+    if (auth.isAuthenticated && auth.role === 'guest' && auth.profile?.requestStatus !== 'pending') {
       setIsClaimModalOpen(true);
     }
   }, [auth.isAuthenticated, auth.role, auth.profile?.requestStatus]);
