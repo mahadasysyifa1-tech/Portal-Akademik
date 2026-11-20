@@ -409,5 +409,39 @@ CREATE INDEX IF NOT EXISTS idx_users_student_id ON app_users(student_id);
 CREATE INDEX IF NOT EXISTS idx_users_request_status ON app_users(request_status);
 `;
 
-export const UNIFIED_SCHEMA_SQL = `${METADATA_SCHEMA_SQL}\n${KALDIK_SCHEMA_SQL}\n${ATTENDANCE_SCHEMA_SQL}\n${AUTH_SCHEMA_SQL}`;
+export const PUSH_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS push_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid TEXT NOT NULL,
+    role TEXT NOT NULL,
+    teacher_id TEXT,
+    student_id TEXT,
+    class_id TEXT,
+    endpoint TEXT NOT NULL UNIQUE,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    class_reminders INTEGER NOT NULL DEFAULT 1,
+    attendance_reminders INTEGER NOT NULL DEFAULT 1,
+    lead_minutes INTEGER NOT NULL DEFAULT 10,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_push_subs_uid ON push_subscriptions(uid);
+CREATE INDEX IF NOT EXISTS idx_push_subs_teacher ON push_subscriptions(teacher_id);
+CREATE INDEX IF NOT EXISTS idx_push_subs_class ON push_subscriptions(class_id);
+
+CREATE TABLE IF NOT EXISTS push_dispatch_log (
+    dispatch_key TEXT PRIMARY KEY,
+    sent_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`;
+
+export const UNIFIED_SCHEMA_SQL = `${METADATA_SCHEMA_SQL}\n${KALDIK_SCHEMA_SQL}\n${ATTENDANCE_SCHEMA_SQL}\n${AUTH_SCHEMA_SQL}\n${PUSH_SCHEMA_SQL}`;
 

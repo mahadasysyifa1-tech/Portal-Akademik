@@ -19,7 +19,9 @@ import { TeacherCard } from './directory/TeachersDirectory';
 import { StudentCard } from './directory/StudentsDirectory';
 import { PacingStatusBadge } from './syllabus/PacingStatusBadge';
 import { AttendanceHistoryModal } from './directory/AttendanceHistoryModal';
+import { PictureUploadModal } from './directory/PictureUploadModal';
 import { ClassIcon } from './ClassIcon';
+import { DirectoryEntityType, DirectoryMediaItem } from '../utils/directoryMedia';
 import { useAttendanceSummary } from '../hooks/useAttendanceSummary';
 import {
   buildTeacherStatsMap,
@@ -74,6 +76,7 @@ interface HomeTabProps {
   pendingStore?: AttendancePendingStore;
   onUpdateDb?: (updater: (prev: DatabaseState) => DatabaseState) => void;
   onEditDisplayCode?: (personType: 'teacher' | 'student', personId: string, nextDisplayCode: string) => void;
+  getMedia?: (entityType: DirectoryEntityType, entityId?: string) => DirectoryMediaItem | undefined;
 }
 
 export const HomeTab: React.FC<HomeTabProps> = ({
@@ -94,7 +97,8 @@ export const HomeTab: React.FC<HomeTabProps> = ({
   isAdmin = false,
   pendingStore,
   onUpdateDb,
-  onEditDisplayCode
+  onEditDisplayCode,
+  getMedia
 }) => {
   const auth = useAuth();
   const effectiveIsAdmin = isAdmin || auth.isAdmin;
@@ -116,6 +120,11 @@ export const HomeTab: React.FC<HomeTabProps> = ({
     personName: string;
     personSubtitle: string;
     summary?: AttendanceSummaryItem;
+  } | null>(null);
+  const [pictureTarget, setPictureTarget] = useState<{
+    entityType: 'teacher' | 'student';
+    entityId: string;
+    entityName: string;
   } | null>(null);
 
   // Current Teacher Profile computation
@@ -1018,6 +1027,11 @@ export const HomeTab: React.FC<HomeTabProps> = ({
               stats={teacherStats}
               taughtSubjects={taughtSubjects}
               summary={summaryMap[myTeacher.id]}
+              pictureMedia={getMedia?.('teacher', myTeacher.id)}
+              canEditPicture={Boolean(effectiveIsAdmin || (auth.isTeacher && auth.teacherId === myTeacher.id))}
+              onEditPicture={(teacher) =>
+                setPictureTarget({ entityType: 'teacher', entityId: teacher.id, entityName: teacher.name })
+              }
               canEditDisplayCode={Boolean(
                 onEditDisplayCode && (effectiveIsAdmin || (auth.isTeacher && auth.teacherId === myTeacher.id))
               )}
@@ -1051,6 +1065,11 @@ export const HomeTab: React.FC<HomeTabProps> = ({
               student={myStudent}
               enrolledClasses={studentEnrolledClasses}
               summary={summaryMap[myStudent.id]}
+              pictureMedia={getMedia?.('student', myStudent.id)}
+              canEditPicture={Boolean(effectiveIsAdmin || (auth.isStudent && auth.studentId === myStudent.id))}
+              onEditPicture={(student) =>
+                setPictureTarget({ entityType: 'student', entityId: student.id, entityName: student.name })
+              }
               canEditDisplayCode={Boolean(
                 onEditDisplayCode && (effectiveIsAdmin || (auth.isStudent && auth.studentId === myStudent.id))
               )}
@@ -1302,6 +1321,18 @@ export const HomeTab: React.FC<HomeTabProps> = ({
           personName={activeHistoryModal.personName}
           personSubtitle={activeHistoryModal.personSubtitle}
           initialSummary={activeHistoryModal.summary}
+        />
+      )}
+
+      {pictureTarget && (
+        <PictureUploadModal
+          isOpen={true}
+          onClose={() => setPictureTarget(null)}
+          entityType={pictureTarget.entityType}
+          entityId={pictureTarget.entityId}
+          entityName={pictureTarget.entityName}
+          currentMedia={getMedia?.(pictureTarget.entityType, pictureTarget.entityId)}
+          aspectHint="square"
         />
       )}
     </div>

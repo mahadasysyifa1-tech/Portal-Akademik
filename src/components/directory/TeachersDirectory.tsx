@@ -5,8 +5,11 @@ import { AttendanceHistoryModal } from './AttendanceHistoryModal';
 import { AttendanceSummaryBar } from './AttendanceSummaryBar';
 import { DirectoryShell } from './DirectoryShell';
 import { DisplayCodeBadge } from './DisplayCodeBadge';
+import { DirectoryPicture } from './DirectoryPicture';
+import { PictureUploadModal } from './PictureUploadModal';
 import { useAuth } from '../../context/AuthContext';
 import { useAttendanceSummary } from '../../hooks/useAttendanceSummary';
+import { DirectoryMediaItem } from '../../utils/directoryMedia';
 import {
   buildTeacherStatsMap,
   getTeacherTaughtSubjects
@@ -17,6 +20,9 @@ export interface TeacherCardProps {
   stats?: { sessions: number; subjects: Set<string> };
   taughtSubjects?: Array<Subject | undefined>;
   summary?: AttendanceSummaryItem;
+  pictureMedia?: DirectoryMediaItem;
+  canEditPicture?: boolean;
+  onEditPicture?: (teacher: Teacher) => void;
   canEditDisplayCode?: boolean;
   onEditDisplayCode?: (teacherId: string, nextDisplayCode: string) => void;
   onOpenHistory?: (teacher: Teacher) => void;
@@ -29,35 +35,64 @@ export const TeacherCard: React.FC<TeacherCardProps> = ({
   stats = { sessions: 0, subjects: new Set() },
   taughtSubjects = [],
   summary,
+  pictureMedia,
+  canEditPicture = false,
+  onEditPicture,
   canEditDisplayCode = false,
   onEditDisplayCode,
   onOpenHistory,
   onSelectSchedule,
   onSelectSubject
 }) => {
+  const initials =
+    teacher.name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() || '')
+      .join('') || 'U';
+
   return (
     <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs hover:shadow-xs transition-shadow flex flex-col justify-between">
       <div>
-        <div className="flex items-start justify-between gap-2 mb-2">
-          <div>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <h3 className="text-sm font-bold text-slate-900">
-                {teacher.name}
-              </h3>
-              {teacher.panggilan && (
-                <span className="text-[11px] font-semibold text-amber-700">
-                  · {teacher.panggilan}
-                </span>
-              )}
-              <DisplayCodeBadge
-                value={teacher.displayCode ?? teacher.display_code ?? ''}
-                canEdit={canEditDisplayCode}
-                onStageChange={(next) => onEditDisplayCode?.(teacher.id, next)}
-              />
+        <div className="flex items-start justify-between gap-2 mb-2.5">
+          <div className="flex items-start gap-3 min-w-0">
+            <DirectoryPicture
+              src={pictureMedia?.imageUrl}
+              alt={teacher.name}
+              containerClassName="w-12 h-12 rounded-2xl"
+              canEdit={canEditPicture}
+              onEditClick={onEditPicture ? () => onEditPicture(teacher) : undefined}
+              editLabel={`Ubah foto ${teacher.name}`}
+              fallback={
+                <div
+                  className="w-full h-full flex items-center justify-center font-bold text-xs text-white select-none"
+                  style={{ backgroundColor: teacher.color || '#4F46E5' }}
+                >
+                  {initials}
+                </div>
+              }
+            />
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <h3 className="text-sm font-bold text-slate-900">
+                  {teacher.name}
+                </h3>
+                {teacher.panggilan && (
+                  <span className="text-[11px] font-semibold text-amber-700">
+                    · {teacher.panggilan}
+                  </span>
+                )}
+                <DisplayCodeBadge
+                  value={teacher.displayCode ?? teacher.display_code ?? ''}
+                  canEdit={canEditDisplayCode}
+                  onStageChange={(next) => onEditDisplayCode?.(teacher.id, next)}
+                />
+              </div>
+              <span className="text-[11px] text-slate-500">
+                {teacher.department || 'Pengajar'}
+              </span>
             </div>
-            <span className="text-[11px] text-slate-500">
-              {teacher.department || 'Pengajar'}
-            </span>
           </div>
           <span className="text-[11px] font-bold text-indigo-700 shrink-0 tabular-nums">
             {stats.sessions} sesi / pekan
@@ -148,18 +183,21 @@ interface TeachersDirectoryProps {
   onSelectTeacherSchedule: (teacherId: string) => void;
   onSelectSubject?: (subjectId: string) => void;
   onEditTeacherDisplayCode?: (teacherId: string, nextDisplayCode: string) => void;
+  getMedia?: (entityType: 'teacher', entityId?: string) => DirectoryMediaItem | undefined;
 }
 
 export const TeachersDirectory: React.FC<TeachersDirectoryProps> = ({
   db,
   onSelectTeacherSchedule,
   onSelectSubject,
-  onEditTeacherDisplayCode
+  onEditTeacherDisplayCode,
+  getMedia
 }) => {
   const auth = useAuth();
   const [search, setSearch] = useState('');
   const summaryMap = useAttendanceSummary('teacher');
   const [activeTeacherForHistory, setActiveTeacherForHistory] = useState<Teacher | null>(null);
+  const [pictureTarget, setPictureTarget] = useState<Teacher | null>(null);
 
   const filteredTeachers = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -208,6 +246,9 @@ export const TeachersDirectory: React.FC<TeachersDirectoryProps> = ({
               stats={stats}
               taughtSubjects={taughtSubjects}
               summary={summaryMap[teacher.id]}
+              pictureMedia={getMedia?.('teacher', teacher.id)}
+              canEditPicture={Boolean(auth.isAdmin || (auth.isTeacher && auth.teacherId === teacher.id))}
+              onEditPicture={setPictureTarget}
               canEditDisplayCode={Boolean(
                 onEditTeacherDisplayCode && (auth.isAdmin || (auth.isTeacher && auth.teacherId === teacher.id))
               )}
@@ -229,6 +270,18 @@ export const TeachersDirectory: React.FC<TeachersDirectoryProps> = ({
           personName={activeTeacherForHistory.name}
           personSubtitle={activeTeacherForHistory.department || 'Pengajar'}
           initialSummary={summaryMap[activeTeacherForHistory.id]}
+        />
+      )}
+
+      {pictureTarget && (
+        <PictureUploadModal
+          isOpen={true}
+          onClose={() => setPictureTarget(null)}
+          entityType="teacher"
+          entityId={pictureTarget.id}
+          entityName={pictureTarget.name}
+          currentMedia={getMedia?.('teacher', pictureTarget.id)}
+          aspectHint="square"
         />
       )}
     </>

@@ -21,6 +21,10 @@ import {
 } from '../../utils/directoryRelations';
 import { useCardHighlight } from '../../hooks/useCardHighlight';
 import { DirectoryShell } from './DirectoryShell';
+import { DirectoryPicture } from './DirectoryPicture';
+import { PictureUploadModal } from './PictureUploadModal';
+import { DirectoryMediaItem } from '../../utils/directoryMedia';
+import { useAuth } from '../../context/AuthContext';
 
 interface BooksDirectoryProps {
   db: DatabaseState;
@@ -29,6 +33,7 @@ interface BooksDirectoryProps {
   onSelectSubject?: (subjectId: string) => void;
   onSelectClass?: (classId: string) => void;
   onNavigateToJournal?: (subjectId?: string, classId?: string, date?: string) => void;
+  getMedia?: (entityType: 'book', entityId?: string) => DirectoryMediaItem | undefined;
 }
 
 export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
@@ -36,9 +41,12 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
   initialSelectedBookId,
   onSelectSubject,
   onSelectClass,
-  onNavigateToJournal
+  onNavigateToJournal,
+  getMedia
 }) => {
+  const auth = useAuth();
   const [search, setSearch] = useState('');
+  const [pictureTarget, setPictureTarget] = useState<{ id: string; title: string } | null>(null);
   const [expandedBookIds, setExpandedBookIds] = useState<Set<string>>(() => {
     return initialSelectedBookId ? new Set([initialSelectedBookId]) : new Set();
   });
@@ -141,7 +149,8 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
   }, [db.books]);
 
   return (
-    <DirectoryShell
+    <>
+      <DirectoryShell
       search={search}
       onSearchChange={setSearch}
       searchPlaceholder="Cari judul kitab, muallif, penerbit, mapel, atau kelas..."
@@ -185,26 +194,42 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
             className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-xs hover:border-indigo-300 transition-all flex flex-col justify-between overflow-hidden"
           >
             <div className="p-4 space-y-3 flex-1">
-              {/* Card Header: Display Code & Unboxed Volume/Page Metadata */}
-              <div className="flex items-center justify-between gap-2">
-                <span className="px-2 py-0.5 rounded-md text-[11px] font-bold font-mono bg-indigo-50 text-indigo-700 border border-indigo-200 tabular-nums">
-                  {book.displayCode || book.id}
-                </span>
-                <span className="text-[11px] font-mono font-semibold text-slate-500 tabular-nums">
-                  {totalJilid} Jilid · {cumulativePages.toLocaleString('id-ID')} Hal
-                </span>
-              </div>
+              {/* Card Header: Cover Image + Code + Title */}
+              <div className="flex items-start gap-3">
+                <DirectoryPicture
+                  src={getMedia?.('book', book.id)?.imageUrl}
+                  alt={book.title}
+                  containerClassName="w-14 h-20 rounded-xl"
+                  canEdit={auth.isAdmin}
+                  onEditClick={() => setPictureTarget({ id: book.id, title: book.title })}
+                  editLabel={`Ubah sampul kitab ${book.title}`}
+                  fallback={
+                    <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-indigo-50 to-indigo-100 text-indigo-600">
+                      <BookOpen className="w-5 h-5" />
+                    </div>
+                  }
+                />
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="px-2 py-0.5 rounded-md text-[11px] font-bold font-mono bg-indigo-50 text-indigo-700 border border-indigo-200 tabular-nums">
+                      {book.displayCode || book.id}
+                    </span>
+                    <span className="text-[11px] font-mono font-semibold text-slate-500 tabular-nums">
+                      {totalJilid} Jilid · {cumulativePages.toLocaleString('id-ID')} Hal
+                    </span>
+                  </div>
 
-              {/* Title & Arabic Alt Title */}
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 leading-snug">
-                  {book.title}
-                </h3>
-                {book.altTitle && book.altTitle !== book.title && (
-                  <p className="text-xs text-indigo-900 font-medium mt-0.5 font-arabic" dir="auto">
-                    {book.altTitle}
-                  </p>
-                )}
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 leading-snug">
+                      {book.title}
+                    </h3>
+                    {book.altTitle && book.altTitle !== book.title && (
+                      <p className="text-xs text-indigo-900 font-medium mt-0.5 font-arabic" dir="auto">
+                        {book.altTitle}
+                      </p>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* Metadata fields */}
@@ -467,5 +492,18 @@ export const BooksDirectory: React.FC<BooksDirectoryProps> = ({
         );
       })}
     </DirectoryShell>
+
+      {pictureTarget && (
+        <PictureUploadModal
+          isOpen={true}
+          onClose={() => setPictureTarget(null)}
+          entityType="book"
+          entityId={pictureTarget.id}
+          entityName={pictureTarget.title}
+          currentMedia={getMedia?.('book', pictureTarget.id)}
+          aspectHint="portrait"
+        />
+      )}
+    </>
   );
 };

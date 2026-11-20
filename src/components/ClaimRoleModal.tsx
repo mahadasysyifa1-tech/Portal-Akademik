@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { X, UserCheck, AlertCircle, Clock, ShieldCheck, CheckCircle2, Search } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { DatabaseState } from '../types';
@@ -85,9 +86,9 @@ export const ClaimRoleModal: React.FC<ClaimRoleModalProps> = ({
     }
   };
 
-  return (
-    <div className="fixed mt-80 inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 animate-in fade-in duration-150">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border border-slate-200">
+  const modalContent = (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 animate-in fade-in duration-150">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto border border-slate-200">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50">
           <div className="flex items-center gap-2.5">
@@ -275,4 +276,6 @@ export const ClaimRoleModal: React.FC<ClaimRoleModalProps> = ({
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : modalContent;
 };

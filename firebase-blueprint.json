@@ -9,10 +9,99 @@
         "email": { "type": "string" },
         "displayName": { "type": "string" },
         "photoURL": { "type": "string" },
-        "role": { "type": "string" }
+        "role": { "type": "string", "enum": ["admin", "teacher", "student", "guest"] }
       },
       "required": ["uid", "email", "role"]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Trusted administrator marker document used for zero-trust Firestore RBAC lookups",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "createdAt"]
+    },
+    "AcademicMember": {
+      "title": "AcademicMember",
+      "description": "Trusted non-guest academic member record allowing access to protected student portrait lookups",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "role": { "type": "string", "enum": ["admin", "teacher", "student"] },
+        "email": { "type": "string", "maxLength": 200 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "role", "email", "updatedAt"]
+    },
+    "DirectoryIdentity": {
+      "title": "DirectoryIdentity",
+      "description": "Admin-managed ownership binding mapping teacher or student IDs to verified account emails",
+      "type": "object",
+      "properties": {
+        "entityType": { "type": "string", "enum": ["teacher", "student"] },
+        "entityId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerEmail": { "type": "string", "maxLength": 200 },
+        "updatedByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["entityType", "entityId", "ownerEmail", "updatedByUid", "updatedAt"]
+    },
+    "DirectoryMediaPublic": {
+      "title": "DirectoryMediaPublic",
+      "description": "Cloud image URL or compressed thumbnail metadata for subjects, books, classes, and teachers",
+      "type": "object",
+      "properties": {
+        "entityType": { "type": "string", "enum": ["subject", "book", "class", "teacher"] },
+        "entityId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "imageUrl": { "type": "string", "minLength": 1, "maxLength": 350000 },
+        "storagePath": { "type": "string", "maxLength": 512 },
+        "sourceType": { "type": "string", "enum": ["upload", "url"] },
+        "visibility": { "type": "string", "enum": ["public"] },
+        "updatedByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["entityType", "entityId", "imageUrl", "sourceType", "visibility", "updatedByUid", "updatedAt"]
+    },
+    "DirectoryMediaStudent": {
+      "title": "DirectoryMediaStudent",
+      "description": "Protected student portrait picture URL or thumbnail isolated from guest accounts",
+      "type": "object",
+      "properties": {
+        "entityType": { "type": "string", "enum": ["student"] },
+        "entityId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "imageUrl": { "type": "string", "minLength": 1, "maxLength": 350000 },
+        "storagePath": { "type": "string", "maxLength": 512 },
+        "sourceType": { "type": "string", "enum": ["upload", "url"] },
+        "visibility": { "type": "string", "enum": ["academic"] },
+        "updatedByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["entityType", "entityId", "imageUrl", "sourceType", "visibility", "updatedByUid", "updatedAt"]
     }
   },
-  "firestore": {}
+  "firestore": {
+    "/admins/{uid}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Trusted administrator identities"
+    },
+    "/academic_members/{uid}": {
+      "schema": { "$ref": "#/entities/AcademicMember" },
+      "description": "Verified academic members permitted to read student directory portraits"
+    },
+    "/directory_identities/{identityId}": {
+      "schema": { "$ref": "#/entities/DirectoryIdentity" },
+      "description": "Teacher and student ownership email bindings managed by administrators"
+    },
+    "/directory_media/{mediaId}": {
+      "schema": { "$ref": "#/entities/DirectoryMediaPublic" },
+      "description": "Pictures for subjects, books, classes, and teachers"
+    },
+    "/directory_media_students/{studentId}": {
+      "schema": { "$ref": "#/entities/DirectoryMediaStudent" },
+      "description": "Protected student directory portraits"
+    }
+  }
 }

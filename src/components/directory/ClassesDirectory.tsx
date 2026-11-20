@@ -21,8 +21,11 @@ import {
 } from 'lucide-react';
 import { ClassIcon } from '../ClassIcon';
 import { DirectoryShell } from './DirectoryShell';
+import { DirectoryPicture } from './DirectoryPicture';
+import { PictureUploadModal } from './PictureUploadModal';
 import { useCardHighlight } from '../../hooks/useCardHighlight';
 import { useAuth } from '../../context/AuthContext';
+import { DirectoryMediaItem } from '../../utils/directoryMedia';
 import { buildClassRelationsMap } from '../../utils/directoryRelations';
 
 export interface ClassCardProps {
@@ -36,6 +39,9 @@ export interface ClassCardProps {
   isGuest: boolean;
   isStudentsExpanded: boolean;
   onToggleStudentsExpanded: () => void;
+  pictureMedia?: DirectoryMediaItem;
+  canEditPicture?: boolean;
+  onEditPicture?: (cls: ClassEntity) => void;
   onSelectSubject?: (subjectId: string) => void;
   onSelectBook?: (bookId: string) => void;
   onSelectTeacherSchedule?: (teacherId: string) => void;
@@ -53,6 +59,9 @@ export const ClassCard: React.FC<ClassCardProps> = ({
   isGuest,
   isStudentsExpanded,
   onToggleStudentsExpanded,
+  pictureMedia,
+  canEditPicture = false,
+  onEditPicture,
   onSelectSubject,
   onSelectBook,
   onSelectTeacherSchedule,
@@ -67,15 +76,25 @@ export const ClassCard: React.FC<ClassCardProps> = ({
       className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between"
     >
       <div className="space-y-3">
-        {/* Card Header: Class Icon, Name, Code & Grade/Section */}
+        {/* Card Header: Class Picture/Icon, Name, Code & Grade/Section */}
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-start gap-2.5 min-w-0">
-            <span
-              className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border border-black/10 shadow-2xs"
-              style={{ backgroundColor: cls.color || '#E0E7FF' }}
-            >
-              <ClassIcon name={cls.icon || 'GraduationCap'} className="w-4 h-4 text-slate-800" />
-            </span>
+            <DirectoryPicture
+              src={pictureMedia?.imageUrl}
+              alt={cls.name}
+              containerClassName="w-11 h-11 rounded-xl"
+              canEdit={canEditPicture}
+              onEditClick={onEditPicture ? () => onEditPicture(cls) : undefined}
+              editLabel={`Ubah gambar kelas ${cls.name}`}
+              fallback={
+                <div
+                  className="w-full h-full flex items-center justify-center"
+                  style={{ backgroundColor: cls.color || '#E0E7FF' }}
+                >
+                  <ClassIcon name={cls.icon || 'GraduationCap'} className="w-4 h-4 text-slate-800" />
+                </div>
+              }
+            />
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 flex-wrap">
                 <h3 className="text-sm font-bold text-slate-900 truncate" title={cls.name}>
@@ -327,6 +346,7 @@ interface ClassesDirectoryProps {
   onSelectBook?: (bookId: string) => void;
   onSelectTeacherSchedule?: (teacherId: string) => void;
   onSelectClassSchedule?: (classId: string, studentId?: string) => void;
+  getMedia?: (entityType: 'class', entityId?: string) => DirectoryMediaItem | undefined;
 }
 
 export const ClassesDirectory: React.FC<ClassesDirectoryProps> = ({
@@ -335,7 +355,8 @@ export const ClassesDirectory: React.FC<ClassesDirectoryProps> = ({
   onSelectSubject,
   onSelectBook,
   onSelectTeacherSchedule,
-  onSelectClassSchedule
+  onSelectClassSchedule,
+  getMedia
 }) => {
   const auth = useAuth();
   const isGuest = !auth.isAuthenticated || auth.role === 'guest';
@@ -343,6 +364,7 @@ export const ClassesDirectory: React.FC<ClassesDirectoryProps> = ({
   const [search, setSearch] = useState('');
   const [gradeFilter, setGradeFilter] = useState<string>('all');
   const [expandedClassIds, setExpandedClassIds] = useState<Set<string>>(() => new Set());
+  const [pictureTarget, setPictureTarget] = useState<ClassEntity | null>(null);
 
   useCardHighlight(
     initialSelectedClassId,
@@ -415,7 +437,8 @@ export const ClassesDirectory: React.FC<ClassesDirectoryProps> = ({
   };
 
   return (
-    <DirectoryShell
+    <>
+      <DirectoryShell
       search={search}
       onSearchChange={setSearch}
       searchPlaceholder="Cari nama kelas, kode, ruang, mapel, kitab, atau pengajar..."
@@ -472,6 +495,9 @@ export const ClassesDirectory: React.FC<ClassesDirectoryProps> = ({
             isGuest={isGuest}
             isStudentsExpanded={expandedClassIds.has(cls.id)}
             onToggleStudentsExpanded={() => toggleStudentsExpanded(cls.id)}
+            pictureMedia={getMedia?.('class', cls.id)}
+            canEditPicture={auth.isAdmin}
+            onEditPicture={setPictureTarget}
             onSelectSubject={isGuest ? undefined : onSelectSubject}
             onSelectBook={onSelectBook}
             onSelectTeacherSchedule={onSelectTeacherSchedule}
@@ -480,5 +506,18 @@ export const ClassesDirectory: React.FC<ClassesDirectoryProps> = ({
         );
       })}
     </DirectoryShell>
+
+      {pictureTarget && (
+        <PictureUploadModal
+          isOpen={true}
+          onClose={() => setPictureTarget(null)}
+          entityType="class"
+          entityId={pictureTarget.id}
+          entityName={pictureTarget.name}
+          currentMedia={getMedia?.('class', pictureTarget.id)}
+          aspectHint="square"
+        />
+      )}
+    </>
   );
 };
