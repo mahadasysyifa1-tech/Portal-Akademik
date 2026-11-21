@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { Bell, BellRing, BellOff, CheckCircle2, AlertCircle, Send, X, RefreshCw } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
@@ -269,9 +270,11 @@ export const NotificationCenterButton: React.FC = () => {
         <span className="hidden lg:inline">{isSubscribed ? 'Notif Aktif' : 'Notifikasi'}</span>
       </button>
 
-      {isOpen && (
-        <div
-          role="dialog"
+      {isOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            role="dialog"
           aria-modal="true"
           onClick={() => setIsOpen(false)}
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto"
@@ -451,8 +454,9 @@ export const NotificationCenterButton: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+          document.body
+        )}
     </>
   );
 };
