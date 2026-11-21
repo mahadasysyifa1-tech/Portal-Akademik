@@ -85,19 +85,47 @@ export async function ensureVapidKeys(client: Client): Promise<VapidKeyPair> {
   }
 }
 
+export interface PushIdentity {
+  uid: string;
+  role: string;
+  teacherId: string | null;
+  studentId: string | null;
+  classId: string | null;
+}
+
+export async function getPushIdentityByEmail(
+  client: Client,
+  email: string
+): Promise<PushIdentity | null> {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!normalizedEmail) return null;
+
+  const res = await client.execute({
+    sql: 'SELECT uid, role, teacher_id, student_id, class_id FROM app_users WHERE LOWER(email) = ? LIMIT 1',
+    args: [normalizedEmail],
+  });
+
+  if (res.rows.length === 0) return null;
+  const row = res.rows[0];
+  return {
+    uid: String(row.uid || ''),
+    role: String(row.role || 'guest'),
+    teacherId: row.teacher_id ? String(row.teacher_id) : null,
+    studentId: row.student_id ? String(row.student_id) : null,
+    classId: row.class_id ? String(row.class_id) : null,
+  };
+}
+
 export async function upsertPushSubscription(
   client: Client,
+  identity: PushIdentity,
   payload: {
-    uid: string;
-    role: string;
-    teacherId?: string;
-    studentId?: string;
-    classId?: string;
     subscription: { endpoint: string; keys: { p256dh: string; auth: string } };
     prefs?: { classReminders?: boolean; attendanceReminders?: boolean; leadMinutes?: number };
   }
 ) {
-  const { uid, role, teacherId, studentId, classId, subscription, prefs } = payload;
+  const { uid, role, teacherId, studentId, classId } = identity;
+  const { subscription, prefs } = payload || {};
   const endpoint = String(subscription?.endpoint || '').trim();
   const p256dh = String(subscription?.keys?.p256dh || '').trim();
   const authSecret = String(subscription?.keys?.auth || '').trim();
@@ -151,26 +179,26 @@ export async function upsertPushSubscription(
   };
 }
 
-export async function removePushSubscription(client: Client, endpoint: string): Promise<void> {
-  if (!endpoint) return;
+export async function removePushSubscription(client: Client, endpoint: string, uid: string): Promise<void> {
+  if (!endpoint || !uid) return;
   await client.execute({
-    sql: 'DELETE FROM push_subscriptions WHERE endpoint = ?',
-    args: [endpoint],
+    sql: 'DELETE FROM push_subscriptions WHERE endpoint = ? AND uid = ?',
+    args: [endpoint, uid],
   });
 }
 
-export async function getPushSubscriptionStatus(client: Client, endpoint?: string, uid?: string) {
-  if (!endpoint && !uid) {
+export async function getPushSubscriptionStatus(client: Client, endpoint: string | undefined, uid: string) {
+  if (!uid) {
     return { subscribed: false };
   }
   const res = endpoint
     ? await client.execute({
-        sql: 'SELECT class_reminders, attendance_reminders, lead_minutes FROM push_subscriptions WHERE endpoint = ? LIMIT 1',
-        args: [endpoint],
+        sql: 'SELECT class_reminders, attendance_reminders, lead_minutes FROM push_subscriptions WHERE endpoint = ? AND uid = ? LIMIT 1',
+        args: [endpoint, uid],
       })
     : await client.execute({
         sql: 'SELECT class_reminders, attendance_reminders, lead_minutes FROM push_subscriptions WHERE uid = ? ORDER BY updated_at DESC LIMIT 1',
-        args: [String(uid)],
+        args: [uid],
       });
 
   if (res.rows.length === 0) {
@@ -206,7 +234,7 @@ async function deliverNotification(
   } catch (err: any) {
     const statusCode = Number(err?.statusCode || 0);
     if (statusCode === 404 || statusCode === 410) {
-      await removePushSubscription(client, sub.endpoint);
+      await removePushSubscription(client, sub.endpoint, sub.uid);
     } else {
       console.warn('[WebPush] Delivery error:', err?.message || err);
     }
@@ -214,13 +242,15 @@ async function deliverNotification(
   }
 }
 
-export async function sendTestPushToEndpoint(client: Client, endpoint: string): Promise<boolean> {
+export async function sendTestPushToEndpoint(client: Client, endpoint: string, uid: string): Promise<boolean> {
   const res = await client.execute({
-    sql: 'SELECT * FROM push_subscriptions WHERE endpoint = ? LIMIT 1',
-    args: [endpoint],
+    sql: 'SELECT * FROM push_subscriptions WHERE endpoint = ? AND uid = ? LIMIT 1',
+    args: [endpoint, uid],
   });
   if (res.rows.length === 0) {
-    throw new Error('Perangkat belum terdaftar untuk Web Push.');
+    const err = new Error('Langganan tidak ditemukan untuk akun ini.') as Error & { status?: number };
+    err.status = 404;
+    throw err;
   }
   const sub = res.rows[0] as unknown as PushSubscriptionRecord;
   return deliverNotification(client, sub, {
@@ -240,7 +270,7 @@ async function claimDispatchKey(client: Client, dispatchKey: string): Promise<bo
   return Number(res.rowsAffected || 0) > 0;
 }
 
-function getWibNow(): { dateStr: string; dayOfWeek: DayOfWeek; minutesOfDay: number } {
+export function getWibNow(): { dateStr: string; dayOfWeek: DayOfWeek; minutesOfDay: number } {
   const now = new Date();
   const wibParts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Jakarta',

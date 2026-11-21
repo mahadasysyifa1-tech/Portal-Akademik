@@ -39,12 +39,12 @@ self.addEventListener('notificationclick', function (event) {
   const targetUrl = (event.notification.data && event.notification.data.url) || '/?tab=home';
 
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (clientList) {
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async function (clientList) {
       for (let i = 0; i < clientList.length; i++) {
         const client = clientList[i];
         if ('focus' in client) {
           if ('navigate' in client) {
-            client.navigate(targetUrl);
+            await client.navigate(targetUrl).catch(() => {});
           }
           return client.focus();
         }

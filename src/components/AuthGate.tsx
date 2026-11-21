@@ -149,6 +149,48 @@ export const AuthGate: React.FC<AuthGateProps> = () => {
 
                     <button
                       type="button"
+                      onClick={() => auth.signInWithRegisteredAccount('abdullohafrizal67@gmail.com', 'Abdullah Afrizal')}
+                      className="w-full flex items-center justify-between px-3 py-2 text-xs text-left bg-white hover:bg-indigo-50 text-slate-800 rounded-lg border border-slate-200 transition-colors cursor-pointer"
+                    >
+                      <div>
+                        <p className="font-bold text-slate-900 text-xs">Abdullah Afrizal</p>
+                        <p className="text-[10px] text-slate-500">abdullohafrizal67@gmail.com</p>
+                      </div>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-100 text-indigo-800">
+                        Santri
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => auth.signInWithRegisteredAccount('tamu1@preview.ijma.id', 'Tamu Preview 1')}
+                      className="w-full flex items-center justify-between px-3 py-2 text-xs text-left bg-white hover:bg-slate-100 text-slate-800 rounded-lg border border-slate-200 transition-colors cursor-pointer"
+                    >
+                      <div>
+                        <p className="font-bold text-slate-900 text-xs">Tamu Preview 1</p>
+                        <p className="text-[10px] text-slate-500">tamu1@preview.ijma.id</p>
+                      </div>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600">
+                        Tamu
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => auth.signInWithRegisteredAccount('tamu2@preview.ijma.id', 'Tamu Preview 2')}
+                      className="w-full flex items-center justify-between px-3 py-2 text-xs text-left bg-white hover:bg-slate-100 text-slate-800 rounded-lg border border-slate-200 transition-colors cursor-pointer"
+                    >
+                      <div>
+                        <p className="font-bold text-slate-900 text-xs">Tamu Preview 2</p>
+                        <p className="text-[10px] text-slate-500">tamu2@preview.ijma.id</p>
+                      </div>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600">
+                        Tamu
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
                       onClick={() => auth.signInWithGoogle()}
                       className="w-full py-1 text-center text-[10px] text-slate-500 hover:text-slate-800 underline transition-colors cursor-pointer"
                     >

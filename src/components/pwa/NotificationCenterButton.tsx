@@ -21,6 +21,24 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
   return outputArray;
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error('Service Worker belum siap dalam batas waktu (timeout).'));
+    }, ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
 export const NotificationCenterButton: React.FC = () => {
   const auth = useAuth();
   const { isIOS, isInstalled } = usePWAInstall();
@@ -46,7 +64,7 @@ export const NotificationCenterButton: React.FC = () => {
 
     setPermission(Notification.permission);
     try {
-      const reg = await navigator.serviceWorker.ready;
+      const reg = await withTimeout(navigator.serviceWorker.ready, 8000);
       const existing = await reg.pushManager.getSubscription();
       if (existing) {
         setCurrentEndpoint(existing.endpoint);
@@ -90,7 +108,7 @@ export const NotificationCenterButton: React.FC = () => {
         throw new Error(keyData.error || 'Kunci Web Push server belum tersedia.');
       }
 
-      const reg = await navigator.serviceWorker.ready;
+      const reg = await withTimeout(navigator.serviceWorker.ready, 8000);
       let sub = await reg.pushManager.getSubscription();
       if (!sub) {
         sub = await reg.pushManager.subscribe({
@@ -139,7 +157,7 @@ export const NotificationCenterButton: React.FC = () => {
     setIsBusy(true);
     setFeedback(null);
     try {
-      const reg = await navigator.serviceWorker.ready;
+      const reg = await withTimeout(navigator.serviceWorker.ready, 8000);
       const sub = await reg.pushManager.getSubscription();
       const endpoint = sub?.endpoint || currentEndpoint;
       if (sub) {

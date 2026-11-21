@@ -97,7 +97,7 @@ export const Header: React.FC<HeaderProps> = ({
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isLoginMenuOpen, setIsLoginMenuOpen] = useState(false);
   const [isClaimModalOpen, setIsClaimModalOpen] = useState(false);
-  const [hasDismissedClaimModal, setHasDismissedClaimModal] = useState(false);
+  const [dismissedClaimUid, setDismissedClaimUid] = useState<string | null>(null);
   const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
   const effectiveIsAdmin = auth.isAdmin;
   const isAcademicVisible = effectiveIsAdmin || auth.isTeacher || auth.isStudent;
@@ -108,14 +108,14 @@ export const Header: React.FC<HeaderProps> = ({
   // Auto-open role claim modal when a guest signs in without a pending request
   React.useEffect(() => {
     if (
-      !hasDismissedClaimModal &&
+      dismissedClaimUid !== auth.profile?.uid &&
       auth.isAuthenticated &&
       auth.role === 'guest' &&
       auth.profile?.requestStatus !== 'pending'
     ) {
       setIsClaimModalOpen(true);
     }
-  }, [hasDismissedClaimModal, auth.isAuthenticated, auth.role, auth.profile?.requestStatus]);
+  }, [dismissedClaimUid, auth.isAuthenticated, auth.role, auth.profile?.uid, auth.profile?.requestStatus]);
 
   React.useEffect(() => {
     if (!effectiveIsAdmin) return;
@@ -434,6 +434,57 @@ export const Header: React.FC<HeaderProps> = ({
                             </div>
                             <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">
                               Ustadz
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsLoginMenuOpen(false);
+                              auth.signInWithRegisteredAccount('abdullohafrizal67@gmail.com', 'Abdullah Afrizal');
+                            }}
+                            className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs text-slate-800 hover:bg-indigo-50/70 hover:text-indigo-900 rounded-lg transition-colors cursor-pointer text-left font-medium border border-slate-100"
+                          >
+                            <div>
+                              <p className="font-bold text-[11px] text-slate-900">Abdullah Afrizal</p>
+                              <p className="text-[10px] text-slate-500">abdullohafrizal67@gmail.com</p>
+                            </div>
+                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800">
+                              Santri
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsLoginMenuOpen(false);
+                              auth.signInWithRegisteredAccount('tamu1@preview.ijma.id', 'Tamu Preview 1');
+                            }}
+                            className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs text-slate-800 hover:bg-slate-50 hover:text-slate-900 rounded-lg transition-colors cursor-pointer text-left font-medium border border-slate-100"
+                          >
+                            <div>
+                              <p className="font-bold text-[11px] text-slate-900">Tamu Preview 1</p>
+                              <p className="text-[10px] text-slate-500">tamu1@preview.ijma.id</p>
+                            </div>
+                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
+                              Tamu
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsLoginMenuOpen(false);
+                              auth.signInWithRegisteredAccount('tamu2@preview.ijma.id', 'Tamu Preview 2');
+                            }}
+                            className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs text-slate-800 hover:bg-slate-50 hover:text-slate-900 rounded-lg transition-colors cursor-pointer text-left font-medium border border-slate-100"
+                          >
+                            <div>
+                              <p className="font-bold text-[11px] text-slate-900">Tamu Preview 2</p>
+                              <p className="text-[10px] text-slate-500">tamu2@preview.ijma.id</p>
+                            </div>
+                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
+                              Tamu
                             </span>
                           </button>
                         </div>
@@ -989,7 +1040,7 @@ export const Header: React.FC<HeaderProps> = ({
         isOpen={isClaimModalOpen}
         onClose={() => {
           setIsClaimModalOpen(false);
-          setHasDismissedClaimModal(true);
+          setDismissedClaimUid(auth.profile?.uid ?? null);
         }}
         db={db || ({ teachers: [], students: [] } as any)}
       />

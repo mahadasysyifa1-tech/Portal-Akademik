@@ -42,13 +42,16 @@ import {
 } from './server/db/auth.ts';
 import {
   ensureVapidKeys,
+  getPushIdentityByEmail,
   upsertPushSubscription,
   removePushSubscription,
   getPushSubscriptionStatus,
   sendTestPushToEndpoint,
   notifyAttendanceLoggedForMeeting,
   startPushScheduler,
+  getWibNow,
 } from './server/push.ts';
+import { requireFirebaseAuth } from './server/auth/firebaseAuth.ts';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -320,14 +323,13 @@ app.get('/api/push/vapid-public-key', async (_req, res) => {
   }
 });
 
-app.get('/api/push/status', async (req, res) => {
+app.get('/api/push/status', requireFirebaseAuth, async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
   const endpoint = req.query.endpoint ? String(req.query.endpoint) : undefined;
-  const uid = req.query.uid ? String(req.query.uid) : undefined;
   try {
-    const status = await getPushSubscriptionStatus(tursoClient, endpoint, uid);
+    const status = await getPushSubscriptionStatus(tursoClient, endpoint, req.firebaseUser!.uid);
     res.json(status);
   } catch (err: any) {
     console.error('Failed to read push status:', err);
@@ -335,12 +337,31 @@ app.get('/api/push/status', async (req, res) => {
   }
 });
 
-app.post('/api/push/subscribe', async (req, res) => {
+app.post('/api/push/subscribe', requireFirebaseAuth, async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
   try {
-    const result = await upsertPushSubscription(tursoClient, req.body || {});
+    const dbIdentity = await getPushIdentityByEmail(tursoClient, req.firebaseUser!.email);
+    if (!dbIdentity) {
+      return res.status(403).json({
+        error: 'Profil akun belum tersinkron. Muat ulang aplikasi lalu coba lagi.',
+      });
+    }
+    const result = await upsertPushSubscription(
+      tursoClient,
+      {
+        uid: req.firebaseUser!.uid,
+        role: dbIdentity.role,
+        teacherId: dbIdentity.teacherId,
+        studentId: dbIdentity.studentId,
+        classId: dbIdentity.classId,
+      },
+      {
+        subscription: req.body?.subscription,
+        prefs: req.body?.prefs,
+      }
+    );
     res.json({ success: true, ...result });
   } catch (err: any) {
     console.error('Failed to subscribe Web Push:', err);
@@ -348,13 +369,13 @@ app.post('/api/push/subscribe', async (req, res) => {
   }
 });
 
-app.post('/api/push/unsubscribe', async (req, res) => {
+app.post('/api/push/unsubscribe', requireFirebaseAuth, async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
   const { endpoint } = req.body || {};
   try {
-    await removePushSubscription(tursoClient, String(endpoint || ''));
+    await removePushSubscription(tursoClient, String(endpoint || ''), req.firebaseUser!.uid);
     res.json({ success: true });
   } catch (err: any) {
     console.error('Failed to unsubscribe Web Push:', err);
@@ -362,7 +383,7 @@ app.post('/api/push/unsubscribe', async (req, res) => {
   }
 });
 
-app.post('/api/push/test', async (req, res) => {
+app.post('/api/push/test', requireFirebaseAuth, async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
@@ -371,9 +392,12 @@ app.post('/api/push/test', async (req, res) => {
     return res.status(400).json({ error: 'Endpoint langganan wajib diisi.' });
   }
   try {
-    const delivered = await sendTestPushToEndpoint(tursoClient, String(endpoint));
+    const delivered = await sendTestPushToEndpoint(tursoClient, String(endpoint), req.firebaseUser!.uid);
     res.json({ success: delivered });
   } catch (err: any) {
+    if (err?.status === 404) {
+      return res.status(404).json({ error: err?.message || 'Langganan tidak ditemukan untuk akun ini.' });
+    }
     console.error('Failed to send test push:', err);
     res.status(400).json({ error: err?.message || 'Gagal mengirim tes notifikasi' });
   }
@@ -453,7 +477,7 @@ app.get('/api/attendance/day-sessions', async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
-  const dateStr = (req.query.date as string) || new Date().toISOString().slice(0, 10);
+  const dateStr = (req.query.date as string) || getWibNow().dateStr;
   try {
     // Fast path: if day meetings already exist, skip loading metadata state completely
     const existingCheck = await tursoClient.execute({
