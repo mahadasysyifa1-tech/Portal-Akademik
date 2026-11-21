@@ -38,6 +38,10 @@ import { ScheduleConflict, DatabaseState } from '../types';
 import { LOGO_BASE64 } from '../assets/logo';
 import { useAuth } from '../context/AuthContext';
 import { ClaimRoleModal } from './ClaimRoleModal';
+import { NotificationCenterButton } from './pwa/NotificationCenterButton';
+
+// Temporary feature gate until the push backend items finish.
+const SHOW_PUSH_UI = import.meta.env.DEV || import.meta.env.VITE_ENABLE_PUSH_UI === 'true';
 
 export type ActiveTabType = 'home' | 'studio' | 'kaldik' | 'presensi' | 'enrollment' | 'journal' | 'syllabus' | 'subjects' | 'books' | 'classes' | 'teachers' | 'students' | 'conflicts' | 'database' | 'export-import' | 'rule-manager';
 
@@ -508,9 +512,14 @@ export const Header: React.FC<HeaderProps> = ({
                 )}
               </div>
             ) : (
-
-              <div className="relative">
-                <button
+              <>
+                {SHOW_PUSH_UI &&
+                  auth.isAuthenticated &&
+                  (auth.role === 'admin' || auth.role === 'teacher' || auth.role === 'student') && (
+                    <NotificationCenterButton />
+                  )}
+                <div className="relative">
+                  <button
                   type="button"
                   id="btn-user-profile"
                   onClick={() => setIsProfileOpen(!isProfileOpen)}
@@ -670,6 +679,7 @@ export const Header: React.FC<HeaderProps> = ({
                   </>
                 )}
               </div>
+              </>
             )}
           </div>
         </div>

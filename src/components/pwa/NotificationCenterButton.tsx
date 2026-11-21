@@ -56,6 +56,15 @@ export const NotificationCenterButton: React.FC = () => {
   const [isBusy, setIsBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  const getAuthHeaders = useCallback(async (): Promise<Record<string, string>> => {
+    if (!auth.user) {
+      throw new Error('Masuk dengan akun Google untuk mengaktifkan notifikasi.');
+    }
+    return {
+      Authorization: 'Bearer ' + (await auth.user.getIdToken()),
+    };
+  }, [auth.user]);
+
   const syncBrowserSubscriptionState = useCallback(async () => {
     if (typeof window === 'undefined') return;
     const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
@@ -63,13 +72,21 @@ export const NotificationCenterButton: React.FC = () => {
     if (!supported) return;
 
     setPermission(Notification.permission);
+    if (!auth.user) {
+      setCurrentEndpoint('');
+      setIsSubscribed(false);
+      return;
+    }
+
     try {
       const reg = await withTimeout(navigator.serviceWorker.ready, 8000);
       const existing = await reg.pushManager.getSubscription();
       if (existing) {
         setCurrentEndpoint(existing.endpoint);
+        const authHeaders = await getAuthHeaders();
         const res = await fetch(
-          `/api/push/status?endpoint=${encodeURIComponent(existing.endpoint)}&uid=${encodeURIComponent(auth.profile?.uid || '')}`
+          `/api/push/status?endpoint=${encodeURIComponent(existing.endpoint)}`,
+          { headers: authHeaders }
         );
         if (res.ok) {
           const data = await res.json();
@@ -83,16 +100,19 @@ export const NotificationCenterButton: React.FC = () => {
     } catch {
       // SW not ready yet
     }
-  }, [auth.profile?.uid]);
+  }, [auth.user, getAuthHeaders]);
 
   useEffect(() => {
-    if (auth.isAuthenticated) {
+    if (auth.isAuthenticated && auth.user) {
       syncBrowserSubscriptionState();
+    } else {
+      setCurrentEndpoint('');
+      setIsSubscribed(false);
     }
-  }, [auth.isAuthenticated, syncBrowserSubscriptionState]);
+  }, [auth.isAuthenticated, auth.user, syncBrowserSubscriptionState]);
 
   const registerOrUpdateSubscription = async (nextPrefs: PushPreferences) => {
-    if (!auth.profile?.uid) return;
+    if (!auth.user) return;
     setIsBusy(true);
     setFeedback(null);
     try {
@@ -117,16 +137,15 @@ export const NotificationCenterButton: React.FC = () => {
         });
       }
 
+      const authHeaders = await getAuthHeaders();
       const subJson = sub.toJSON();
       const saveRes = await fetch('/api/push/subscribe', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders,
+        },
         body: JSON.stringify({
-          uid: auth.profile.uid,
-          role: auth.role,
-          teacherId: auth.teacherId,
-          studentId: auth.studentId,
-          classId: auth.classId,
           subscription: {
             endpoint: sub.endpoint,
             keys: {
@@ -137,7 +156,7 @@ export const NotificationCenterButton: React.FC = () => {
           prefs: nextPrefs,
         }),
       });
-      const saveData = await saveRes.json();
+      const saveData = await saveRes.json().catch(() => ({}));
       if (!saveRes.ok || !saveData.success) {
         throw new Error(saveData.error || 'Gagal menyimpan langganan notifikasi.');
       }
@@ -154,21 +173,30 @@ export const NotificationCenterButton: React.FC = () => {
   };
 
   const handleUnsubscribe = async () => {
+    if (!auth.user) return;
     setIsBusy(true);
     setFeedback(null);
     try {
       const reg = await withTimeout(navigator.serviceWorker.ready, 8000);
       const sub = await reg.pushManager.getSubscription();
       const endpoint = sub?.endpoint || currentEndpoint;
-      if (sub) {
-        await sub.unsubscribe();
-      }
       if (endpoint) {
-        await fetch('/api/push/unsubscribe', {
+        const authHeaders = await getAuthHeaders();
+        const unsubRes = await fetch('/api/push/unsubscribe', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders,
+          },
           body: JSON.stringify({ endpoint }),
         });
+        const unsubData = await unsubRes.json().catch(() => ({}));
+        if (!unsubRes.ok || !unsubData.success) {
+          throw new Error(unsubData.error || 'Gagal menonaktifkan langganan notifikasi.');
+        }
+      }
+      if (sub) {
+        await sub.unsubscribe();
       }
       setCurrentEndpoint('');
       setIsSubscribed(false);
@@ -181,16 +209,20 @@ export const NotificationCenterButton: React.FC = () => {
   };
 
   const handleSendTest = async () => {
-    if (!currentEndpoint) return;
+    if (!auth.user || !currentEndpoint) return;
     setIsBusy(true);
     setFeedback(null);
     try {
+      const authHeaders = await getAuthHeaders();
       const res = await fetch('/api/push/test', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders,
+        },
         body: JSON.stringify({ endpoint: currentEndpoint }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Tes notifikasi gagal dikirim.');
       }
@@ -203,6 +235,7 @@ export const NotificationCenterButton: React.FC = () => {
   };
 
   const updatePrefAndSync = (patch: Partial<PushPreferences>) => {
+    if (!auth.user) return;
     const next = { ...prefs, ...patch };
     setPrefs(next);
     if (isSubscribed) {
@@ -274,6 +307,12 @@ export const NotificationCenterButton: React.FC = () => {
                 </div>
               )}
 
+              {!auth.user && (
+                <div className="p-3 rounded-xl bg-slate-100 border border-slate-200 text-slate-700 leading-relaxed">
+                  Masuk dengan akun Google untuk mengaktifkan notifikasi.
+                </div>
+              )}
+
               {!isSupported ? (
                 <div className="p-3 rounded-xl bg-slate-100 border border-slate-200 text-slate-700 flex items-start gap-2">
                   <BellOff className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
@@ -298,7 +337,7 @@ export const NotificationCenterButton: React.FC = () => {
                     {isSubscribed ? (
                       <button
                         type="button"
-                        disabled={isBusy}
+                        disabled={isBusy || !auth.user}
                         onClick={handleUnsubscribe}
                         className="px-3 py-1.5 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 font-semibold whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
                       >
@@ -307,7 +346,7 @@ export const NotificationCenterButton: React.FC = () => {
                     ) : (
                       <button
                         type="button"
-                        disabled={isBusy || permission === 'denied'}
+                        disabled={isBusy || permission === 'denied' || !auth.user}
                         onClick={() => registerOrUpdateSubscription(prefs)}
                         className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 shadow-xs"
                       >
@@ -329,7 +368,7 @@ export const NotificationCenterButton: React.FC = () => {
                         type="checkbox"
                         checked={prefs.classReminders}
                         onChange={(e) => updatePrefAndSync({ classReminders: e.target.checked })}
-                        disabled={isBusy}
+                        disabled={isBusy || !auth.user}
                         className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                       />
                     </label>
@@ -340,7 +379,7 @@ export const NotificationCenterButton: React.FC = () => {
                         <select
                           value={prefs.leadMinutes}
                           onChange={(e) => updatePrefAndSync({ leadMinutes: Number(e.target.value) })}
-                          disabled={isBusy}
+                          disabled={isBusy || !auth.user}
                           className="px-2.5 py-1 bg-white border border-slate-300 rounded-lg font-mono text-xs font-semibold text-slate-800 cursor-pointer"
                         >
                           <option value={5}>5 menit</option>
@@ -362,7 +401,7 @@ export const NotificationCenterButton: React.FC = () => {
                         type="checkbox"
                         checked={prefs.attendanceReminders}
                         onChange={(e) => updatePrefAndSync({ attendanceReminders: e.target.checked })}
-                        disabled={isBusy}
+                        disabled={isBusy || !auth.user}
                         className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                       />
                     </label>
@@ -391,7 +430,7 @@ export const NotificationCenterButton: React.FC = () => {
                 {isSubscribed ? (
                   <button
                     type="button"
-                    disabled={isBusy}
+                    disabled={isBusy || !auth.user}
                     onClick={handleSendTest}
                     className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-semibold cursor-pointer disabled:opacity-50"
                   >
