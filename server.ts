@@ -233,7 +233,7 @@ app.post('/api/auth/request-role', async (req, res) => {
   }
 });
 
-app.get('/api/auth/pending-requests', async (req, res) => {
+app.get('/api/auth/pending-requests', requireRole('admin'), async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
@@ -246,7 +246,7 @@ app.get('/api/auth/pending-requests', async (req, res) => {
   }
 });
 
-app.post('/api/auth/approve-request', async (req, res) => {
+app.post('/api/auth/approve-request', requireRole('admin'), async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
@@ -290,7 +290,7 @@ app.post('/api/directory/display-code', async (req, res) => {
   }
 });
 
-app.post('/api/auth/reject-request', async (req, res) => {
+app.post('/api/auth/reject-request', requireRole('admin'), async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
