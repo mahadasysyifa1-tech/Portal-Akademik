@@ -563,23 +563,61 @@ const UniversalCsvHub: React.FC<UniversalCsvHubProps> = ({
 
       const rows = parsed.slice(1);
 
+      const recordErrorSample = (samples: string[], msg: string) => {
+        const trimmed = msg.trim();
+        if (trimmed && !samples.includes(trimmed) && samples.length < 3) {
+          samples.push(trimmed);
+        }
+      };
+
+      const readFailureMessage = async (res: Response): Promise<string> => {
+        try {
+          const body = await res.json();
+          if (body && typeof body.error === 'string' && body.error.trim()) {
+            return body.error.trim();
+          }
+        } catch {}
+        return `HTTP ${res.status}`;
+      };
+
       if (selectedTable === 'students') {
         let successCount = 0;
+        let failedCount = 0;
+        const errorSamples: string[] = [];
         for (const row of rows) {
           const [id, nisn, name, gender, phone] = row;
           if (!name) continue;
           try {
-            await fetch('/api/enrollment/students', {
+            const res = await fetch('/api/enrollment/students', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 student: { id: id || `std-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, nisn, name, gender: gender === 'P' ? 'P' : 'L', phone },
               }),
             });
-            successCount++;
-          } catch {}
+            if (!res.ok) {
+              failedCount++;
+              recordErrorSample(errorSamples, await readFailureMessage(res));
+            } else {
+              successCount++;
+            }
+          } catch (err: any) {
+            failedCount++;
+            recordErrorSample(
+              errorSamples,
+              err instanceof Error && err.message ? err.message : 'Kesalahan jaringan'
+            );
+          }
         }
-        onSetStatus({ type: 'success', message: `Berhasil mengimpor ${successCount} data santri ke basis data.` });
+        if (failedCount > 0) {
+          const detail = errorSamples.length > 0 ? ` Contoh galat: ${errorSamples.join('; ')}` : '';
+          onSetStatus({
+            type: 'error',
+            message: `${successCount} berhasil, ${failedCount} gagal.${detail}`,
+          });
+        } else {
+          onSetStatus({ type: 'success', message: `Berhasil mengimpor ${successCount} data santri ke basis data.` });
+        }
         setCsvPreview(null);
         setPreviewFile(null);
         return;
@@ -587,19 +625,40 @@ const UniversalCsvHub: React.FC<UniversalCsvHubProps> = ({
 
       if (selectedTable === 'enrollments') {
         let successCount = 0;
+        let failedCount = 0;
+        const errorSamples: string[] = [];
         for (const row of rows) {
           const [classId, studentId] = row;
           if (!classId || !studentId) continue;
           try {
-            await fetch('/api/enrollment/quick-assign', {
+            const res = await fetch('/api/enrollment/quick-assign', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ studentId, classId }),
             });
-            successCount++;
-          } catch {}
+            if (!res.ok) {
+              failedCount++;
+              recordErrorSample(errorSamples, await readFailureMessage(res));
+            } else {
+              successCount++;
+            }
+          } catch (err: any) {
+            failedCount++;
+            recordErrorSample(
+              errorSamples,
+              err instanceof Error && err.message ? err.message : 'Kesalahan jaringan'
+            );
+          }
         }
-        onSetStatus({ type: 'success', message: `Berhasil memperbarui ${successCount} penugasan rombel santri.` });
+        if (failedCount > 0) {
+          const detail = errorSamples.length > 0 ? ` Contoh galat: ${errorSamples.join('; ')}` : '';
+          onSetStatus({
+            type: 'error',
+            message: `${successCount} berhasil, ${failedCount} gagal.${detail}`,
+          });
+        } else {
+          onSetStatus({ type: 'success', message: `Berhasil memperbarui ${successCount} penugasan rombel santri.` });
+        }
         setCsvPreview(null);
         setPreviewFile(null);
         return;
