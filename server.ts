@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import {
   ensureDataSeeded,
   getDatabaseState,
@@ -48,6 +49,7 @@ import {
   getPushSubscriptionStatus,
   sendTestPushToEndpoint,
   notifyAttendanceLoggedForMeeting,
+  runPushSchedulerTick,
   startPushScheduler,
   getWibNow,
 } from './server/push.ts';
@@ -400,6 +402,46 @@ app.post('/api/push/test', requireFirebaseAuth, async (req, res) => {
     }
     console.error('Failed to send test push:', err);
     res.status(400).json({ error: err?.message || 'Gagal mengirim tes notifikasi' });
+  }
+});
+
+let isPushTickRunning = false;
+
+app.post('/api/push/tick', async (req, res) => {
+  const expectedSecret = (process.env.CRON_SECRET || '').trim();
+  if (!expectedSecret) {
+    return res.status(503).json({ error: 'CRON_SECRET belum dikonfigurasi.' });
+  }
+
+  const rawHeader = req.headers['x-cron-secret'];
+  const providedSecret = typeof rawHeader === 'string' ? rawHeader : '';
+  if (!providedSecret) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const expectedDigest = crypto.createHash('sha256').update(expectedSecret, 'utf8').digest();
+  const providedDigest = crypto.createHash('sha256').update(providedSecret, 'utf8').digest();
+  if (!crypto.timingSafeEqual(expectedDigest, providedDigest)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  if (!tursoClient) {
+    return res.status(503).json({ error: 'Turso database is offline' });
+  }
+
+  if (isPushTickRunning) {
+    return res.json({ success: true, skipped: true });
+  }
+
+  isPushTickRunning = true;
+  try {
+    await runPushSchedulerTick(tursoClient, getDatabaseState);
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('Failed to execute push scheduler tick:', err);
+    res.status(500).json({ error: 'Tick gagal' });
+  } finally {
+    isPushTickRunning = false;
   }
 });
 

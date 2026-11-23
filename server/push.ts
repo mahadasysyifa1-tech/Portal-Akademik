@@ -482,6 +482,7 @@ export async function runPushSchedulerTick(
     }
   } catch (err) {
     console.warn('[WebPush Scheduler] Tick error:', err);
+    throw err;
   }
 }
 
