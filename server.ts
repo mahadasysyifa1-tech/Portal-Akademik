@@ -50,6 +50,7 @@ import {
   getWibNow,
 } from './server/push.ts';
 import { requireFirebaseAuth } from './server/auth/firebaseAuth.ts';
+import { isAuthEnforced } from './server/auth/access.ts';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -91,6 +92,7 @@ app.get('/api/health', (req, res) => {
     database: 'ijma-metadata (unified)',
     dbReady,
     dbError: dbInitError ? dbInitError.message : null,
+    authEnforced: isAuthEnforced(),
   });
 });
 
