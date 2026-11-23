@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
 import path from 'path';
-import fs from 'fs';
 import crypto from 'crypto';
 import {
   ensureDataSeeded,
@@ -10,9 +9,6 @@ import {
   resetDatabaseState,
   invalidateDatabaseStateCache,
   tursoClient,
-  METADATA_SCHEMA_SQL,
-  KALDIK_SCHEMA_SQL,
-  UNIFIED_SCHEMA_SQL,
 } from './server/db/index.ts';
 import {
   getOrCreateDayMeetings,
@@ -736,41 +732,6 @@ app.post('/api/enrollment/save-all', async (req, res) => {
     console.error('Failed to save enrollments:', err);
     res.status(500).json({ error: 'Failed to save enrollments', details: err?.message });
   }
-});
-
-// Endpoints for exporting/downloading the SQLite files directly
-app.get('/api/database/download/metadata', (req, res) => {
-  const filePath = path.join(process.cwd(), 'data', 'metadata.db');
-  if (fs.existsSync(filePath)) {
-    res.download(filePath, 'metadata.db');
-  } else {
-    res.status(404).send('metadata.db not found');
-  }
-});
-
-app.get('/api/database/download/kaldik', (req, res) => {
-  const filePath = path.join(process.cwd(), 'data', 'kaldik.db');
-  if (fs.existsSync(filePath)) {
-    res.download(filePath, 'kaldik.db');
-  } else {
-    res.status(404).send('kaldik.db not found');
-  }
-});
-
-app.get('/api/database/schema', (req, res) => {
-  res.type('text/plain').send(UNIFIED_SCHEMA_SQL);
-});
-
-app.get('/api/database/schema/unified', (req, res) => {
-  res.type('text/plain').send(UNIFIED_SCHEMA_SQL);
-});
-
-app.get('/api/database/schema/metadata', (req, res) => {
-  res.type('text/plain').send(METADATA_SCHEMA_SQL);
-});
-
-app.get('/api/database/schema/kaldik', (req, res) => {
-  res.type('text/plain').send(KALDIK_SCHEMA_SQL);
 });
 
 // Set up Vite dev server middleware or production static serving
