@@ -50,7 +50,7 @@ import {
   getWibNow,
 } from './server/push.ts';
 import { requireFirebaseAuth } from './server/auth/firebaseAuth.ts';
-import { isAuthEnforced } from './server/auth/access.ts';
+import { isAuthEnforced, requireRole } from './server/auth/access.ts';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -136,7 +136,7 @@ app.get('/api/database', async (req, res) => {
   }
 });
 
-app.post('/api/database/save', async (req, res) => {
+app.post('/api/database/save', requireRole('admin'), async (req, res) => {
   const newData = req.body;
   if (!newData || !newData.subjects) {
     return res.status(400).json({ error: 'Invalid database structure' });
@@ -165,7 +165,7 @@ app.post('/api/database/save', async (req, res) => {
     res.status(500).json({ error: 'Failed to write to database', details: err?.message });
   }
 });
-app.post('/api/database/reset', async (req, res) => {
+app.post('/api/database/reset', requireRole('admin'), async (req, res) => {
   try {
     await resetDatabaseState();
     const data = await getDatabaseState();
