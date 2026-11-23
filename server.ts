@@ -588,7 +588,7 @@ app.post('/api/attendance/meetings/:meetingId/status', async (req, res) => {
   }
 });
 
-app.post('/api/attendance/generate-all-meetings', async (_req, res) => {
+app.post('/api/attendance/generate-all-meetings', requireRole('admin'), async (_req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
@@ -657,7 +657,7 @@ app.get('/api/enrollment/overview', async (_req, res) => {
   }
 });
 
-app.post('/api/enrollment/quick-assign', async (req, res) => {
+app.post('/api/enrollment/quick-assign', requireRole('admin'), async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
@@ -674,7 +674,7 @@ app.post('/api/enrollment/quick-assign', async (req, res) => {
   }
 });
 
-app.post('/api/enrollment/quick-unassign', async (req, res) => {
+app.post('/api/enrollment/quick-unassign', requireRole('admin'), async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
@@ -691,7 +691,7 @@ app.post('/api/enrollment/quick-unassign', async (req, res) => {
   }
 });
 
-app.post('/api/enrollment/students', async (req, res) => {
+app.post('/api/enrollment/students', requireRole('admin'), async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
@@ -708,7 +708,7 @@ app.post('/api/enrollment/students', async (req, res) => {
   }
 });
 
-app.delete('/api/enrollment/students/:id', async (req, res) => {
+app.delete('/api/enrollment/students/:id', requireRole('admin'), async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
@@ -722,7 +722,7 @@ app.delete('/api/enrollment/students/:id', async (req, res) => {
   }
 });
 
-app.post('/api/enrollment/save-all', async (req, res) => {
+app.post('/api/enrollment/save-all', requireRole('admin'), async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
