@@ -30,7 +30,6 @@ import {
 } from './server/db/attendance.ts';
 import {
   syncUserWithTurso,
-  getUserProfileByUid,
   requestUserRole,
   getPendingRoleRequests,
   approveRoleRequest,
@@ -50,7 +49,7 @@ import {
   getWibNow,
 } from './server/push.ts';
 import { requireFirebaseAuth } from './server/auth/firebaseAuth.ts';
-import { isAuthEnforced, requireRole } from './server/auth/access.ts';
+import { isAuthEnforced, requireRole, requireUser } from './server/auth/access.ts';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -179,11 +178,14 @@ app.post('/api/database/reset', requireRole('admin'), async (req, res) => {
 // ============================================================================
 // Authentication & Mirroring Endpoints (Firebase Auth + Turso Source of Truth)
 // ============================================================================
-app.post('/api/auth/sync', async (req, res) => {
+app.post('/api/auth/sync', requireUser, async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
-  const { uid, email, displayName, photoURL } = req.body || {};
+  const body = req.body || {};
+  const uid = req.firebaseUser ? req.firebaseUser.uid : body.uid;
+  const email = req.firebaseUser ? req.firebaseUser.email : body.email;
+  const { displayName, photoURL } = body;
   if (!uid || !email) {
     return res.status(400).json({ error: 'Missing uid or email' });
   }
@@ -196,28 +198,13 @@ app.post('/api/auth/sync', async (req, res) => {
   }
 });
 
-app.get('/api/auth/profile/:uid', async (req, res) => {
+app.post('/api/auth/request-role', requireUser, async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
-  const { uid } = req.params;
-  try {
-    const profile = await getUserProfileByUid(tursoClient, uid);
-    if (!profile) {
-      return res.status(404).json({ error: 'Profile not found' });
-    }
-    res.json({ success: true, profile });
-  } catch (err: any) {
-    console.error('Failed to get auth profile:', err);
-    res.status(500).json({ error: 'Failed to get profile', details: err?.message });
-  }
-});
-
-app.post('/api/auth/request-role', async (req, res) => {
-  if (!tursoClient) {
-    return res.status(503).json({ error: 'Turso database is offline' });
-  }
-  const { uid, requestedRole, requestedPersonId } = req.body || {};
+  const body = req.body || {};
+  const uid = req.firebaseUser ? req.firebaseUser.uid : body.uid;
+  const { requestedRole, requestedPersonId } = body;
   if (!uid || !requestedRole || !requestedPersonId) {
     return res.status(400).json({ error: 'Field uid, requestedRole, dan requestedPersonId wajib diisi.' });
   }
