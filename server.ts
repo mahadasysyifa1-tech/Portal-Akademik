@@ -125,7 +125,7 @@ app.use(['/api/database', '/api/attendance', '/api/enrollment', '/api/auth', '/a
 
 
 // Primary data endpoints for Portal Akademik (Turso Cloud SQL + SQLite fallback)
-app.get('/api/database', async (req, res) => {
+app.get('/api/database', requireUser, async (req, res) => {
   try {
     const data = await getDatabaseState();
     res.json(data);
@@ -251,11 +251,13 @@ app.post('/api/auth/approve-request', requireRole('admin'), async (req, res) => 
   }
 });
 
-app.post('/api/directory/display-code', async (req, res) => {
+app.post('/api/directory/display-code', requireUser, async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
-  const { actorUid, updates, personType, personId, displayCode } = req.body || {};
+  const body = req.body || {};
+  const actorUid = req.firebaseUser ? req.firebaseUser.uid : body.actorUid;
+  const { updates, personType, personId, displayCode } = body;
   const list = Array.isArray(updates)
     ? updates
     : personType && personId
@@ -433,7 +435,7 @@ app.post('/api/push/tick', async (req, res) => {
 // ============================================================================
 // Attendance (Presensi Terpadu) Endpoints
 // ============================================================================
-app.get('/api/attendance/month-rollcalls', async (req, res) => {
+app.get('/api/attendance/month-rollcalls', requireUser, async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
@@ -452,7 +454,7 @@ app.get('/api/attendance/month-rollcalls', async (req, res) => {
   }
 });
 
-app.get('/api/attendance/month-meetings', async (req, res) => {
+app.get('/api/attendance/month-meetings', requireUser, async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
@@ -473,7 +475,7 @@ app.get('/api/attendance/month-meetings', async (req, res) => {
   }
 });
 
-app.post('/api/attendance/batch-save', async (req, res) => {
+app.post('/api/attendance/batch-save', requireRole('admin', 'teacher'), async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
@@ -500,7 +502,7 @@ app.post('/api/attendance/batch-save', async (req, res) => {
   }
 });
 
-app.get('/api/attendance/day-sessions', async (req, res) => {
+app.get('/api/attendance/day-sessions', requireUser, async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
@@ -520,7 +522,7 @@ app.get('/api/attendance/day-sessions', async (req, res) => {
   }
 });
 
-app.get('/api/attendance/meetings/:meetingId/logs', async (req, res) => {
+app.get('/api/attendance/meetings/:meetingId/logs', requireUser, async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
@@ -537,7 +539,7 @@ app.get('/api/attendance/meetings/:meetingId/logs', async (req, res) => {
   }
 });
 
-app.post('/api/attendance/meetings/:meetingId/logs', async (req, res) => {
+app.post('/api/attendance/meetings/:meetingId/logs', requireRole('admin', 'teacher'), async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
@@ -556,7 +558,7 @@ app.post('/api/attendance/meetings/:meetingId/logs', async (req, res) => {
   }
 });
 
-app.post('/api/attendance/meetings/:meetingId/status', async (req, res) => {
+app.post('/api/attendance/meetings/:meetingId/status', requireRole('admin', 'teacher'), async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
@@ -593,7 +595,7 @@ app.post('/api/attendance/generate-all-meetings', requireRole('admin'), async (_
   }
 });
 
-app.get('/api/attendance/summary', async (req, res) => {
+app.get('/api/attendance/summary', requireUser, async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
@@ -608,7 +610,7 @@ app.get('/api/attendance/summary', async (req, res) => {
   }
 });
 
-app.get('/api/attendance/person-history', async (req, res) => {
+app.get('/api/attendance/person-history', requireUser, async (req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }
@@ -630,7 +632,7 @@ app.get('/api/attendance/person-history', async (req, res) => {
 // ----------------------------------------------------------------------------
 // Enrollment & Roster APIs
 // ----------------------------------------------------------------------------
-app.get('/api/enrollment/overview', async (_req, res) => {
+app.get('/api/enrollment/overview', requireUser, async (_req, res) => {
   if (!tursoClient) {
     return res.status(503).json({ error: 'Turso database is offline' });
   }

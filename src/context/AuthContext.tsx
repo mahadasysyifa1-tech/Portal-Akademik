@@ -201,9 +201,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       setIsLoading(true);
       try {
-        localStorage.removeItem('ijma_active_preview_user');
-      } catch {}
-      await firebaseSignOut(auth);
+        await firebaseSignOut(auth);
+      } finally {
+        try {
+          localStorage.removeItem('ijma_active_preview_user');
+          localStorage.removeItem('school_schedule_db');
+          localStorage.removeItem('ijma_viewer_role');
+          localStorage.removeItem('ijma_viewer_id');
+        } catch {}
+      }
       setUser(null);
       setProfile(null);
       setAuthError(null);

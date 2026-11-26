@@ -390,14 +390,24 @@ export default function App() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, [db]);
 
-  // Fetch from backend API on mount
+  // Fetch from backend API once authenticated (and re-fetch when user UID changes)
   useEffect(() => {
-    fetch('/api/database')
+    if (!auth.isAuthenticated) {
+      setCloudLoad('loading');
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+    setCloudLoad('loading');
+
+    fetch('/api/database', { signal: controller.signal })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
       .then((data: any) => {
+        if (cancelled) return;
         setCloudLoad('ok');
         if (data && data.subjects && data.subjects.length > 0) {
           const normalized = normalizeDatabaseState(data);
@@ -408,10 +418,16 @@ export default function App() {
         }
       })
       .catch((err) => {
+        if (cancelled || err?.name === 'AbortError') return;
         console.warn('Failed to load from Turso; showing local cache only:', err);
         setCloudLoad('failed');
       });
-  }, []);
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [auth.isAuthenticated, auth.profile?.uid]);
 
   // Keep db.meetings in sync whenever attendance or meetings are updated
   useEffect(() => {
